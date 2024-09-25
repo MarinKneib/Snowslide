@@ -25,9 +25,9 @@ dir_path = utils.get_temp_dir('snowslide')
 cfg.PATHS['working_dir'] = utils.mkdir(dir_path)
 
 # %%
-rgi_ids = ['RGI60-11.01450']  # This is Aletsch
+# rgi_ids = ['RGI60-11.01450']  # This is Aletsch
 # rgi_ids = ['RGI60-11.00897']  # This is Hintereisferner
-# rgi_ids = ['RGI60-11.03466']  # This is Talefre
+rgi_ids = ['RGI60-11.03466']  # This is Talefre
 # rgi_ids = ['RGI60-11.03638']  # This is Argentiere
 # rgi_ids = ['RGI60-15.03734']  # This is Changri Nup
 # rgi_ids = ['RGI60-11.03584'] # Tre les Eaux
