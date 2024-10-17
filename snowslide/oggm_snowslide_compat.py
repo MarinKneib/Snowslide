@@ -101,9 +101,17 @@ def snowslide_statistics(gdir):
     d["rgi_subregion"] = gdir.rgi_subregion
     d["rgi_area_km2"] = gdir.rgi_area_km2
     d["map_dx"] = resolution
+    d["cenlat"] = gdir.cenlat
+    d["cenlon"] = gdir.cenlon
     d["snowslide_1m_glacier_average"] = np.NaN
     d["snowslide_deposit_area_km2"] = np.NaN
     d["snowslide_deposit_volume_km3"] = np.NaN
+    d["melt_f"] = gdir.read_json("mb_calib")['melt_f']
+    d["temp_bias"] = gdir.read_json("mb_calib")['temp_bias']
+    d["prcp_fac"] = gdir.read_json("mb_calib")['prcp_fac']
+    d["melt_f_with_ava"] = gdir.read_json("mb_calib", filesuffix='_with_ava')['melt_f']
+    d["temp_bias_with_ava"] = gdir.read_json("mb_calib", filesuffix='_with_ava')['temp_bias']
+    d["prcp_fac_with_ava"] = gdir.read_json("mb_calib", filesuffix='_with_ava')['prcp_fac']
 
     try:
         with xr.open_dataset(gdir.get_filepath("gridded_data")) as ds:
