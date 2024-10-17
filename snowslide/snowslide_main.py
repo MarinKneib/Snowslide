@@ -253,6 +253,7 @@ def snowslide_base(
     param_expo={"a": 0.14, "c": 145, "min": 0.05},
     param_routing={"routing": "mfd", "preprocessing": True, "compute_edges": True},
     glacier_id="",
+    propagation_boolean=True
 ):
     """This function operates the gravitationnal transport of the snow from an initial map of snow heights and a dem.
     Snowslide_base is the fastest computing snowslide algorithm with very basic display functionalities allowed for the user.
@@ -288,6 +289,8 @@ def snowslide_base(
             activate or deactivate computing of edges for the slope function
     glacier_id : str, optional
         for logging only: add the name of the glacier to the log messages
+    propagation_boolean : boolean
+        for reduction of snow holding depth for pixels receiving avalanches (as in Queno et al., 2023: https://doi.org/10.5194/egusphere-2023-2071)
 
     Returns
     -------
@@ -318,7 +321,6 @@ def snowslide_base(
     ### Core part of the code ###
 
     convergence = []
-    iter = 0
     while indicateur > epsilon:
         snd1 = np.copy(snd)
         hnso = (
@@ -331,6 +333,14 @@ def snowslide_base(
         snd_max = snd_max_exponential(
             hnso_slope, param_expo["a"], param_expo["c"], param_expo["min"]
         )
+        # reduce snow depth threshold by 30% for pixels that have revived snow, i.e. pixels tht have more snow than snd_max after the first iteration
+        snd_flat = snd.flatten()
+        snd_max_flat = snd_max.flatten()
+        if iter > 0 & propagation_boolean:
+            snd_max_flat[snd_flat>snd_max_flat] = 0.70*snd_max_flat[snd_flat>snd_max_flat]
+        snd_max_updated = snd_max_flat.reshape(snd_max.shape)
+        snd_max = snd_max_updated
+
         snd = snow_routing(snd, snd_max, flow_dir, param_routing["routing"])
 
         iter = iter + 1
