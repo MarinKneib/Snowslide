@@ -101,6 +101,8 @@ def snowslide_statistics(gdir):
     d["rgi_subregion"] = gdir.rgi_subregion
     d["rgi_area_km2"] = gdir.rgi_area_km2
     d["map_dx"] = resolution
+    d["cenlat"] = gdir.cenlat
+    d["cenlon"] = gdir.cenlon
     d["snowslide_1m_glacier_average"] = np.NaN
     d["snowslide_deposit_area_km2"] = np.NaN
     d["snowslide_deposit_volume_km3"] = np.NaN
