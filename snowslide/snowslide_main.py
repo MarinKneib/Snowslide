@@ -336,7 +336,7 @@ def snowslide_base(
         # reduce snow depth threshold by 30% for pixels that have revived snow, i.e. pixels tht have more snow than snd_max after the first iteration
         snd_flat = snd.flatten()
         snd_max_flat = snd_max.flatten()
-        if iter > 0 & propagation_boolean:
+        if (iter > 0) & propagation_boolean:
             snd_max_flat[snd_flat>snd_max_flat] = 0.70*snd_max_flat[snd_flat>snd_max_flat]
         snd_max_updated = snd_max_flat.reshape(snd_max.shape)
         snd_max = snd_max_updated
