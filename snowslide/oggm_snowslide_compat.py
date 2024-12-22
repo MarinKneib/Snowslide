@@ -20,8 +20,9 @@ import oggm.cfg as cfg
 from oggm import utils
 from oggm.cfg import SEC_IN_YEAR, SEC_IN_MONTH
 from oggm.exceptions import InvalidWorkflowError, InvalidParamsError
-from oggm.core.massbalance import MassBalanceModel, mb_calibration_from_scalar_mb
+from oggm.core.massbalance import MassBalanceModel, mb_calibration_from_scalar_mb, decide_winter_precip_factor
 from snowslide.snowslide_main import snowslide_base
+from oggm.utils import get_temp_bias_dataframe, clip_scalar
 
 # Climate relevant global params
 MB_GLOBAL_PARAMS = [
@@ -33,15 +34,15 @@ MB_GLOBAL_PARAMS = [
 
 
 @utils.entity_task(log, writes=["gridded_data"])
-def snowslide_to_gdir(gdir, routing="mfd", Propagation=True):
+def snowslide_to_gdir(gdir, routing="mfd", Propagation=True, snd0=None):
     """Add an idealized estimation of avalanches snow redistribution to this glacier directory
 
     Parameters
     ----------
     gdir : :py:class:`oggm.GlacierDirectory`
         the glacier directory to process
-    SND_init : float
-        Idealized initial snow depth (in meters) chosen to run the Snowslide simulation
+    snd0 : float
+        initial snow depth (in meters) chosen to run the Snowslide simulation
     """
     # Get the path to the gridded data file and open it
     gridded_data_path = gdir.get_filepath("gridded_data")
@@ -51,8 +52,11 @@ def snowslide_to_gdir(gdir, routing="mfd", Propagation=True):
     # Get the path of the dem and climate data
     path_to_dem = gdir.get_filepath("dem")
 
-    # Launch snowslide simulation with idealized 1m initial snow depth
-    snd0 = np.ones_like(ds.topo.data)
+    # if initial snow depth not given, use default value of 1m snow everywhere
+    if snd0 is None:
+        snd0 = np.ones_like(ds.topo.data)
+    
+    # Launch snowslide simulation with initial snow depth
     param_routing = {"routing": routing, "preprocessing": True, "compute_edges": True}
     snd = snowslide_base(
         path_to_dem,
@@ -66,14 +70,124 @@ def snowslide_to_gdir(gdir, routing="mfd", Propagation=True):
     with utils.ncDataset(gdir.get_filepath("gridded_data"), "a") as nc:
         vn = "snowslide_1m"
 
+        # delete the variable if it already exists
         if vn in nc.variables:
-            v = nc.variables[vn]
-        else:
-            v = nc.createVariable(vn, "f4", ("y", "x"), zlib=True)
+            nc.remove_variable(vn)
 
+        # create the variable
+        v = nc.createVariable(vn, "f4", ("y", "x"), zlib=True)
+
+        # set attributes
         v.units = "m"
         v.long_name = "Snowcover after avalanches"
+        # assign data to variable
         v[:] = snd
+
+def snowslide_to_gdir_meanmonthly_2000_2020(gdir, routing="mfd", Propagation=True, default_grad=-0.0065, t_solid=0, t_liq=2):
+    """Add an estimation of avalanches snow redistribution to this glacier directory for the period 2000-2020 using the W5E5 data
+
+    Parameters
+    ----------
+    gdir : :py:class:`oggm.GlacierDirectory`
+        the glacier directory to process
+    default_grad: np.float
+        temperature gradient as a function of elevation (K/m)
+    t_solid: np.float
+        temperature below which all the precipitation is solid (°C)
+    t_liq: np.float
+        temperature above which all the precipitation is liquid (°C)
+    """
+    # Read W5E5 climate data
+    with xr.open_dataset(gdir.get_filepath('climate_historical')) as ds:
+        ds_w5e5 = ds.load()
+
+    # monthly temperature and precipitation over the Hugonnet et al. (2021) period (01/2000-01/2020)
+    temp = ds_w5e5.temp.sel(time=slice("2000-01", "2020-01")).values
+    prcp = ds_w5e5.prcp.sel(time=slice("2000-01", "2020-01")).values
+
+    grad = prcp * 0 + default_grad
+    ref_hgt = ds_w5e5.ref_hgt
+
+    # Get minimum and maximum altitude in dem (to compute snow height from precipitation)
+    gridded_data_path = gdir.get_filepath("gridded_data")
+    with xr.open_dataset(gridded_data_path) as ds:
+        ds = ds.load()
+    
+    # snowslide parameters
+    param_routing = {"routing": routing, "preprocessing": True, "compute_edges": True}
+
+    # Get the path of the dem and climate data
+    path_to_dem = gdir.get_filepath("dem")
+
+    # define start and end years
+    ys = 2000
+    ye = 2020
+    n_years = ye-ys
+
+    ## run snowslide MEAN MONTHLY over the full time period to compute yearly Prcp fact as a function of altitude
+    snd_before = xr.zeros_like(ds['topo'])
+    snd_after = xr.zeros_like(ds['topo'])
+
+    for ii in range(0, 12):
+        sndm = np.zeros_like(ds.topo.data)
+        for jj in range(0,n_years):
+            # calculate temp & prcp as a function of elevation
+            itemp = temp[ii+jj*12]
+            iprcp = prcp[ii+jj*12]
+            igrad = grad[ii+jj*12]
+
+            # compute elevation of liquid and solid precip
+            zliq = ref_hgt + (t_liq-itemp)/igrad
+            zsolid = ref_hgt + (t_solid-itemp)/igrad
+
+            # Compute initial snow depth
+            snd0 = np.ones_like(ds.topo.data)
+            snd0[ds.topo.data>zsolid] = iprcp
+            snd0[ds.topo.data<zliq] = 0
+            heights_mix = ds.topo.data[(ds.topo.data<=zsolid) & (ds.topo.data>=zliq)]
+            snd0[(ds.topo.data<=zsolid) & (ds.topo.data>=zliq)] = iprcp * 1 - (itemp + igrad * (heights_mix - ref_hgt) - t_solid) / (t_liq - t_solid)
+
+            # Convert to snow height (density conversion from kg/m2)
+            rho_freshsnow = 200 # in kg/m3
+            snd0 = snd0/rho_freshsnow
+            
+            # add to monthly snow depth
+            sndm = sndm+snd0
+
+        sndm = sndm/n_years
+
+        # Run snowslide
+        snd = snowslide_base(
+            path_to_dem,
+            snd0=sndm,
+            param_routing=param_routing,
+            glacier_id=f"({gdir.rgi_id}) ",
+            propagation_boolean=Propagation
+        )
+
+        # allocate 
+        snd_after = snd_after+snd
+        snd_before = snd_before+sndm
+
+    # pfact from snd_after & snd_before
+    pfact = snd_after/snd_before
+
+    # Write to get gridded snowline_1m product
+    with utils.ncDataset(gdir.get_filepath("gridded_data"), "a") as nc:
+        vn = "snowslide_1m"
+
+        # delete the variable if it already exists
+        if vn in nc.variables:
+            nc.remove_variable(vn)
+
+        # create the variable
+        v = nc.createVariable(vn, "f4", ("y", "x"), zlib=True)
+
+        # set attributes
+        v.units = "m"
+        v.long_name = "Snowcover after avalanches"
+        # assign data to variable
+        v[:] = pfact
 
 
 def _fallback(gdir):
@@ -637,6 +751,7 @@ def mb_calibration_from_geodetic_mb_with_avalanches(
     write_to_gdir=True,
     overwrite_gdir=True,
     override_missing=False,
+    informed_threestep=False,
     mb_model_class=MonthlyTIAvalancheModel,
 ):
     """Calibrate for geodetic MB data from Hugonnet et al., 2021.
@@ -673,6 +788,9 @@ def mb_calibration_from_geodetic_mb_with_avalanches(
         if the reference geodetic data is not available, use this value instead
         (mostly for testing with exotic datasets, but could be used to open
         the door to using other datasets).
+    informed_threestep : bool
+        the magic method Fabi found out one day before release.
+        Overrides the calibrate_param order below.
     mb_model_class : MassBalanceModel class
         the MassBalanceModel to use for the calibration. Needs to use the
         same parameters as MonthlyTIModel (the default): melt_f,
@@ -698,25 +816,79 @@ def mb_calibration_from_geodetic_mb_with_avalanches(
             raise
         ref_mb = override_missing
 
-    # We assume it has been calibrated
-    calib_params = gdir.read_json("mb_calib")
+    if informed_threestep:
+        temp_bias = 0
+        if cfg.PARAMS['use_temp_bias_from_file']:
+            climinfo = gdir.get_climate_info()
+            if 'w5e5' not in climinfo['baseline_climate_source'].lower():
+                raise InvalidWorkflowError('use_temp_bias_from_file currently '
+                                        'only available for W5E5 data.')
+        bias_df = get_temp_bias_dataframe()
+        ref_lon = climinfo['baseline_climate_ref_pix_lon']
+        ref_lat = climinfo['baseline_climate_ref_pix_lat']
+        # Take nearest
+        dis = ((bias_df.lon_val - ref_lon)**2 + (bias_df.lat_val - ref_lat)**2)**0.5
+        sel_df = bias_df.iloc[np.argmin(dis)]
+        temp_bias = sel_df['median_temp_bias_w_err_grouped']
+        assert np.isfinite(temp_bias), 'Temp bias not finite?'
 
-    return mb_calibration_from_scalar_mb(
-        gdir,
-        ref_mb=ref_mb,
-        ref_mb_err=ref_mb_err,
-        ref_period=ref_period,
-        write_to_gdir=write_to_gdir,
-        overwrite_gdir=overwrite_gdir,
-        calibrate_param1="prcp_fac",
-        calibrate_param2="melt_f",
-        calibrate_param3="temp_bias",
-        prcp_fac=calib_params["prcp_fac"],
-        melt_f=calib_params["melt_f"],
-        temp_bias=calib_params["temp_bias"],
-        mb_model_class=mb_model_class,
-        filesuffix='_with_ava',
-    )
+        if not cfg.PARAMS['use_temp_bias_from_file']:
+            raise InvalidParamsError('With `informed_threestep` you need to '
+                                     'set `use_temp_bias_from_file`.')
+        if not cfg.PARAMS['use_winter_prcp_fac']:
+            raise InvalidParamsError('With `informed_threestep` you need to '
+                                     'set `use_winter_prcp_fac`.')
+
+        # Some magic heuristics - we just decide to calibrate
+        # precip -> melt_f -> temp but informed by previous data.
+
+        # Temp bias was decided anyway, we keep as previous value and
+        # allow it to vary as last resort
+
+        # We use the precip factor but allow it to vary between 0.8, 1.2 of
+        # the previous value (uncertainty).
+        prcp_fac = decide_winter_precip_factor(gdir)
+        mi, ma = cfg.PARAMS['prcp_fac_min'], cfg.PARAMS['prcp_fac_max']
+        prcp_fac_min = clip_scalar(prcp_fac * 0.8, mi, ma)
+        prcp_fac_max = clip_scalar(prcp_fac * 1.2, mi, ma)
+
+        return mb_calibration_from_scalar_mb(gdir,
+                                             ref_mb=ref_mb,
+                                             ref_mb_err=ref_mb_err,
+                                             ref_period=ref_period,
+                                             write_to_gdir=write_to_gdir,
+                                             overwrite_gdir=overwrite_gdir,
+                                             calibrate_param1='prcp_fac',
+                                             calibrate_param2='melt_f',
+                                             calibrate_param3='temp_bias',
+                                             prcp_fac=prcp_fac,
+                                             prcp_fac_min=prcp_fac_min,
+                                             prcp_fac_max=prcp_fac_max,
+                                             temp_bias=temp_bias,
+                                             mb_model_class=mb_model_class,
+                                             filesuffix='_with_ava',
+                                             )
+    
+    else: 
+        # We assume it has been calibrated
+        calib_params = gdir.read_json("mb_calib")
+
+        return mb_calibration_from_scalar_mb(
+            gdir,
+            ref_mb=ref_mb,
+            ref_mb_err=ref_mb_err,
+            ref_period=ref_period,
+            write_to_gdir=write_to_gdir,
+            overwrite_gdir=overwrite_gdir,
+            calibrate_param1="prcp_fac",
+            calibrate_param2="melt_f",
+            calibrate_param3="temp_bias",
+            prcp_fac=calib_params["prcp_fac"],
+            melt_f=calib_params["melt_f"],
+            temp_bias=calib_params["temp_bias"],
+            mb_model_class=mb_model_class,
+            filesuffix='_with_ava',
+        )
 
 
 class MonthlyTIAvalancheModel_2D(MassBalanceModel):
