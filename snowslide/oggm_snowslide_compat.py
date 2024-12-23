@@ -83,6 +83,7 @@ def snowslide_to_gdir(gdir, routing="mfd", Propagation=True, snd0=None):
         # assign data to variable
         v[:] = snd
 
+@utils.entity_task(log, writes=["gridded_data"])
 def snowslide_to_gdir_meanmonthly_2000_2020(gdir, routing="mfd", Propagation=True, default_grad=-0.0065, t_solid=0, t_liq=2):
     """Add an estimation of avalanches snow redistribution to this glacier directory for the period 2000-2020 using the W5E5 data
 
@@ -188,7 +189,6 @@ def snowslide_to_gdir_meanmonthly_2000_2020(gdir, routing="mfd", Propagation=Tru
         v.long_name = "Snowcover after avalanches"
         # assign data to variable
         v[:] = pfact
-
 
 def _fallback(gdir):
     """If something wrong happens below"""
@@ -1367,8 +1367,6 @@ def mb_calibration_from_geodetic_mb_with_avalanches_2D(
         mb_model_class=mb_model_class,
         filesuffix='_with_ava',
     )
-
-
 
 
 
