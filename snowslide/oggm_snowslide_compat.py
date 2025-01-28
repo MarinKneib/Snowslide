@@ -24,7 +24,6 @@ from oggm.core.massbalance import MassBalanceModel, mb_calibration_from_scalar_m
 from snowslide.snowslide_main import snowslide_base
 from oggm.utils import get_temp_bias_dataframe, clip_scalar
 from oggm.core import massbalance
-from snowslide.oggm_snowslide_compat import MonthlyTIAvalancheModel, mb_calibration_from_geodetic_mb_with_avalanches
 
 # Climate relevant global params
 MB_GLOBAL_PARAMS = [
