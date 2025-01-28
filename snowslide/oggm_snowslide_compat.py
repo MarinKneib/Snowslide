@@ -305,8 +305,14 @@ def binned_statistics(gdir):
             dem = ds["topo"].data
             valid_mask = ds["glacier_mask"].data
             avalanche = ds["snowslide_1m"].data
+        
+        # Get flowline
+        flowline = gdir.read_pickle('inversion_flowlines')[0]
+        # get mass balance model
+        mb_control = MonthlyTIModel(gdir)
+        mb_ava = MonthlyTIAvalancheModel(gdir)
     except:
-        return d1, d2
+        return d1, d2, d3, d4
 
     bsize = 50.0
     dem_on_ice = dem[valid_mask == 1]
@@ -320,14 +326,7 @@ def binned_statistics(gdir):
 
     topo_digi = np.digitize(dem_on_ice, bins) - 1
     
-
     ## SMB 2000-2020 (control & ava models)
-    # Get flowline
-    flowline = gdir.read_pickle('inversion_flowlines')[0]
-
-    # get mass balance model
-    mb_control = MonthlyTIModel(gdir)
-    mb_ava = MonthlyTIAvalancheModel(gdir)
 
     # get annual mass balance at bin elevation
     df_control = pd.DataFrame(index=flowline.dx_meter * np.arange(flowline.nx))
