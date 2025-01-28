@@ -20,9 +20,11 @@ import oggm.cfg as cfg
 from oggm import utils
 from oggm.cfg import SEC_IN_YEAR, SEC_IN_MONTH
 from oggm.exceptions import InvalidWorkflowError, InvalidParamsError
-from oggm.core.massbalance import MassBalanceModel, mb_calibration_from_scalar_mb, decide_winter_precip_factor
+from oggm.core.massbalance import MassBalanceModel, mb_calibration_from_scalar_mb, decide_winter_precip_factor, mb_calibration_from_geodetic_mb, MonthlyTIModel
 from snowslide.snowslide_main import snowslide_base
 from oggm.utils import get_temp_bias_dataframe, clip_scalar
+from oggm.core import massbalance
+from snowslide.oggm_snowslide_compat import MonthlyTIAvalancheModel, mb_calibration_from_geodetic_mb_with_avalanches
 
 # Climate relevant global params
 MB_GLOBAL_PARAMS = [
@@ -289,9 +291,15 @@ def binned_statistics(gdir):
 
     d1 = dict()
     d2 = dict()
+    d3 = dict() # SMB control
+    d4 = dict() # SMB ava
+
+    ## avalanche correction factor & area per elevation bin
     # Easy stats - this should always be possible
     d1["rgi_id"] = gdir.rgi_id
     d2["rgi_id"] = gdir.rgi_id
+    d3["rgi_id"] = gdir.rgi_id
+    d4["rgi_id"] = gdir.rgi_id
 
     try:
         with xr.open_dataset(gdir.get_filepath("gridded_data")) as ds:
@@ -312,12 +320,40 @@ def binned_statistics(gdir):
     )
 
     topo_digi = np.digitize(dem_on_ice, bins) - 1
+    
+
+    ## SMB 2000-2020 (control & ava models)
+    # Get flowline
+    flowline = gdir.read_pickle('inversion_flowlines')[0]
+
+    # get mass balance model
+    mb_control = MonthlyTIModel(gdir)
+    mb_ava = MonthlyTIAvalancheModel(gdir)
+
+    # get annual mass balance at bin elevation
+    df_control = pd.DataFrame(index=flowline.dx_meter * np.arange(flowline.nx))
+    df_ava = pd.DataFrame(index=flowline.dx_meter * np.arange(flowline.nx))
+    for year in range(2000, 2020):
+        df_control[year] = mb_control.get_annual_mb(flowline.surface_h, year=year) * cfg.SEC_IN_YEAR * mb_control.rho
+        df_ava[year] = mb_ava.get_annual_mb(flowline.surface_h, year=year) * cfg.SEC_IN_YEAR * mb_control.rho
+
+    df_control = df_control.mean(axis=1)
+    df_ava = df_ava.mean(axis=1)
+
+    # linearly interpolate to bin elevation
+    df_ava_interpolated = np.interp(bins, np.flip(flowline.surface_h), np.flip(df_ava.values)) # need to flip the arrays for elevation to be monotonically increasing
+    df_control_interpolated = np.interp(bins, np.flip(flowline.surface_h), np.flip(df_control.values))
+
+    df_ava_interpolated
+
     for b, bs in enumerate((bins[1:] + bins[:-1]) / 2):
         on_bin = topo_digi == b
         d1["{}".format(np.round(bs).astype(int))] = np.mean(avalanche_on_ice[on_bin])
         d2["{}".format(np.round(bs).astype(int))] = np.sum(on_bin) * gdir.grid.dx**2
+        d3["{}".format(np.round(bs).astype(int))] = df_control_interpolated[b]
+        d4["{}".format(np.round(bs).astype(int))] = df_ava_interpolated[b]
 
-    return d1, d2
+    return d1, d2, d3, d4
 
 
 @utils.global_task(log)
@@ -339,9 +375,13 @@ def compile_binned_statistics(gdirs, filesuffix="", dir_path=None):
 
     ava = pd.DataFrame([d[0] for d in out_df]).set_index("rgi_id")
     area = pd.DataFrame([d[1] for d in out_df]).set_index("rgi_id")
+    mb_control = pd.DataFrame([d[2] for d in out_df]).set_index("rgi_id")
+    mb_ava = pd.DataFrame([d[3] for d in out_df]).set_index("rgi_id")
 
     ava = ava[sorted(ava.columns)]
     area = area[sorted(area.columns)]
+    mb_control = mb_control[sorted(mb_control.columns)]
+    mb_ava = mb_ava[sorted(mb_ava.columns)]
 
     if dir_path is None:
         dir_path = cfg.PATHS["working_dir"]
@@ -352,7 +392,13 @@ def compile_binned_statistics(gdirs, filesuffix="", dir_path=None):
     out_file = os.path.join(dir_path, f"binned_area{filesuffix}.csv")
     area.to_csv(out_file)
 
-    return ava, area
+    out_file = os.path.join(dir_path, f"binned_mb_control{filesuffix}.csv")
+    mb_control.to_csv(out_file)
+
+    out_file = os.path.join(dir_path, f"binned_mb_ava{filesuffix}.csv")
+    mb_ava.to_csv(out_file)
+
+    return ava, area, mb_control, mb_ava
 
 
 class MonthlyTIAvalancheModel(MassBalanceModel):
@@ -849,8 +895,12 @@ def mb_calibration_from_geodetic_mb_with_avalanches(
         # the previous value (uncertainty).
         prcp_fac = decide_winter_precip_factor(gdir)
         mi, ma = cfg.PARAMS['prcp_fac_min'], cfg.PARAMS['prcp_fac_max']
-        prcp_fac_min = clip_scalar(prcp_fac * 0.8, mi, ma)
-        prcp_fac_max = clip_scalar(prcp_fac * 1.2, mi, ma)
+
+        # these were the 'arbitrary' bounds imposed in Schuster et al., 2023. For our application we allow it to vary more (but keeping the minimum and maximum values)
+        #prcp_fac_min = clip_scalar(prcp_fac * 0.8, mi, ma)
+        #prcp_fac_max = clip_scalar(prcp_fac * 1.2, mi, ma)
+        prcp_fac_min = mi
+        prcp_fac_max = ma
 
         return mb_calibration_from_scalar_mb(gdir,
                                              ref_mb=ref_mb,
