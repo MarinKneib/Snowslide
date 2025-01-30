@@ -84,31 +84,45 @@ def snowslide_to_gdir(gdir, routing="mfd", Propagation=True, snd0=None):
         # assign data to variable
         v[:] = snd
 
+
 @utils.entity_task(log, writes=["gridded_data"])
-def snowslide_to_gdir_meanmonthly_2000_2020(gdir, routing="mfd", Propagation=True, default_grad=-0.0065, t_solid=0, t_liq=2):
-    """Add an estimation of avalanches snow redistribution to this glacier directory for the period 2000-2020 using the W5E5 data
+def snowslide_to_gdir_meanmonthly(gdir, fpath, routing="mfd", Propagation=True, default_grad=-0.0065, t_solid=0, t_liq=2, 
+    ys=2000, ye=2020, rho_freshsnow=200):
+    """Add an estimation of avalanches snow redistribution to this glacier directory for a given period
+    using given climate data using a mean monthly aggregation
 
     Parameters
     ----------
     gdir : :py:class:`oggm.GlacierDirectory`
         the glacier directory to process
+    fpath : string
+        path to climate data withing gdir (either historical or from GCM+SSP)
     default_grad: np.float
         temperature gradient as a function of elevation (K/m)
     t_solid: np.float
         temperature below which all the precipitation is solid (°C)
     t_liq: np.float
         temperature above which all the precipitation is liquid (°C)
+    ys: np.float
+        Start year for SnowSlide simulation
+    ye: np.float
+        End year for SnowSlide simulation
+    rho_freshsnow: np.float
+        Density of fresh snow (kg/m3) to convert to snow height (input precipitation data is in kg/m2)
     """
-    # Read W5E5 climate data
-    with xr.open_dataset(gdir.get_filepath('climate_historical')) as ds:
-        ds_w5e5 = ds.load()
+    # number of years
+    n_years = ye-ys
+    
+    # Read climate data
+    with xr.open_dataset(fpath) as ds:
+        ds = ds.load()
 
-    # monthly temperature and precipitation over the Hugonnet et al. (2021) period (01/2000-01/2020)
-    temp = ds_w5e5.temp.sel(time=slice("2000-01", "2020-01")).values
-    prcp = ds_w5e5.prcp.sel(time=slice("2000-01", "2020-01")).values
+    # monthly temperature and precipitation the wanted period (01/20XX-01/20YY)
+    temp = ds.temp.sel(time=slice(f"{ys}-01", f"{ye}-01")).values
+    prcp = ds.prcp.sel(time=slice(f"{ys}-01", f"{ye}-01")).values
 
     grad = prcp * 0 + default_grad
-    ref_hgt = ds_w5e5.ref_hgt
+    ref_hgt = ds.ref_hgt
 
     # Get minimum and maximum altitude in dem (to compute snow height from precipitation)
     gridded_data_path = gdir.get_filepath("gridded_data")
@@ -120,11 +134,6 @@ def snowslide_to_gdir_meanmonthly_2000_2020(gdir, routing="mfd", Propagation=Tru
 
     # Get the path of the dem and climate data
     path_to_dem = gdir.get_filepath("dem")
-
-    # define start and end years
-    ys = 2000
-    ye = 2020
-    n_years = ye-ys
 
     ## run snowslide MEAN MONTHLY over the full time period to compute yearly Prcp fact as a function of altitude
     snd_before = xr.zeros_like(ds['topo'])
@@ -150,7 +159,6 @@ def snowslide_to_gdir_meanmonthly_2000_2020(gdir, routing="mfd", Propagation=Tru
             snd0[(ds.topo.data<=zsolid) & (ds.topo.data>=zliq)] = iprcp * 1 - (itemp + igrad * (heights_mix - ref_hgt) - t_solid) / (t_liq - t_solid)
 
             # Convert to snow height (density conversion from kg/m2)
-            rho_freshsnow = 200 # in kg/m3
             snd0 = snd0/rho_freshsnow
             
             # add to monthly snow depth
@@ -178,18 +186,19 @@ def snowslide_to_gdir_meanmonthly_2000_2020(gdir, routing="mfd", Propagation=Tru
     with utils.ncDataset(gdir.get_filepath("gridded_data"), "a") as nc:
         vn = "snowslide_1m"
 
-        # delete the variable if it already exists
+        # create the variable if it does not already exists
         if vn in nc.variables:
-            nc.remove_variable(vn)
+            v = nc.variables[vn]
+        else:
+            # create the variable
+            v = nc.createVariable(vn, "f4", ("y", "x"), zlib=True)
+            # set attributes
+            v.units = "m"
+            v.long_name = "Snowcover after avalanches"
 
-        # create the variable
-        v = nc.createVariable(vn, "f4", ("y", "x"), zlib=True)
-
-        # set attributes
-        v.units = "m"
-        v.long_name = "Snowcover after avalanches"
         # assign data to variable
         v[:] = pfact
+
 
 def _fallback(gdir):
     """If something wrong happens below"""
