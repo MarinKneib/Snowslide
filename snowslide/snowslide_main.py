@@ -8,7 +8,7 @@ import logging
 
 log = logging.getLogger(__name__)
 
-# from snowslide.display_3Dresults import * Don't need it for now
+# from snowslide.display_3Dresults import * # Don't need it for now
 
 
 def snowslide_complete(
