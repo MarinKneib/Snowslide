@@ -86,17 +86,17 @@ def snowslide_to_gdir(gdir, routing="mfd", Propagation=True, snd0=None):
 
 
 @utils.entity_task(log, writes=["gridded_data"])
-def snowslide_to_gdir_meanmonthly(gdir, fpath, routing="mfd", Propagation=True, default_grad=-0.0065, t_solid=0, t_liq=2, 
-    ys=2000, ye=2020, rho_freshsnow=200):
+def snowslide_to_gdir_meanmonthly(gdir, clim_path='climate_historical', routing="mfd", Propagation=True, default_grad=-0.0065, t_solid=0, t_liq=2, 
+    ys=2000, ye=2020, rho_freshsnow=200, climate_input_filesuffix=''):
     """Add an estimation of avalanches snow redistribution to this glacier directory for a given period
     using given climate data using a mean monthly aggregation
 
     Parameters
     ----------
-    gdir : :py:class:`oggm.GlacierDirectory`
+    gdir: :py:class:`oggm.GlacierDirectory`
         the glacier directory to process
-    fpath : string
-        path to climate data withing gdir (either historical or from GCM+SSP)
+    clim_path: str
+        path to climate data withing gdir (either 'climate_historical' or 'gcm_data' with a given file_suffix)
     default_grad: np.float
         temperature gradient as a function of elevation (K/m)
     t_solid: np.float
@@ -109,11 +109,14 @@ def snowslide_to_gdir_meanmonthly(gdir, fpath, routing="mfd", Propagation=True, 
         End year for SnowSlide simulation
     rho_freshsnow: np.float
         Density of fresh snow (kg/m3) to convert to snow height (input precipitation data is in kg/m2)
+    climate_input_filesuffix: str
+        filesuffix for the input climate file
     """
     # number of years
     n_years = ye-ys
     
     # Read climate data
+    fpath = gdir.get_filepath(clim_path, filesuffix=climate_input_filesuffix)
     with xr.open_dataset(fpath) as ds:
         ds = ds.load()
 
@@ -903,11 +906,13 @@ def mb_calibration_from_geodetic_mb_with_avalanches(
         prcp_fac = decide_winter_precip_factor(gdir)
         mi, ma = cfg.PARAMS['prcp_fac_min'], cfg.PARAMS['prcp_fac_max']
 
-        # these were the 'arbitrary' bounds imposed in Schuster et al., 2023. For our application we allow it to vary more (but keeping the minimum and maximum values)
-        #prcp_fac_min = clip_scalar(prcp_fac * 0.8, mi, ma)
-        #prcp_fac_max = clip_scalar(prcp_fac * 1.2, mi, ma)
-        prcp_fac_min = mi
-        prcp_fac_max = ma
+        # these were the 'arbitrary' bounds imposed in Schuster et al., 2023. 
+        prcp_fac_min = clip_scalar(prcp_fac * 0.8, mi, ma)
+        prcp_fac_max = clip_scalar(prcp_fac * 1.2, mi, ma)
+
+        # If we want to allow them to vary more (but keeping the minimum and maximum values)
+        #prcp_fac_min = mi
+        #prcp_fac_max = ma
 
         return mb_calibration_from_scalar_mb(gdir,
                                              ref_mb=ref_mb,
