@@ -203,12 +203,168 @@ def snowslide_to_gdir_meanmonthly(gdir, clim_path='climate_historical', routing=
         v[:] = pfact
 
 
+@utils.entity_task(log, writes=['gridded_simulation'])
+def update_topo(gdir, input_filesuffix='', output_filesuffix=''):
+    """Add the avalanche contribution and altitude distribution with time to the glacier directory 
+
+    Parameters
+    ----------
+    gdir: :py:class:`oggm.GlacierDirectory`
+        the glacier directory to process
+    input_filesuffix: str
+        string ID for GCM, SSP, control/avalanche scenario. 
+    output_filesuffix: str
+        output file suffix
+    """
+
+    with xr.open_dataset(gdir.get_filepath('gridded_simulation', filesuffix=input_filesuffix)) as ds:
+        ds = ds.load()
+
+    with xr.open_dataset(gdir.get_filepath('gridded_data')) as gridded_data:
+        gridded_data = gridded_data.load()
+  
+    # select last year of simulation to update topography
+    year = ds.time[-1]
+
+    # Select data for the current year and fill NaNs with zeros
+    thickness_year = ds.simulated_thickness.sel(time=year).fillna(0)
+    
+    # Compute updated topography based on the current year's thickness
+    updated_topo = ds.bedrock + thickness_year
+
+    # assign new topo to old topo in gridded_data
+    gridded_data = gridded_data.assign(topo=updated_topo)
+
+    # save back
+    gridded_data.to_netcdf(gdir.get_filepath('gridded_data',
+                                   filesuffix=output_filesuffix))
+
+
+@utils.entity_task(log, writes=['gridded_simulation'])
+def avalanche_contribution_evo(gdir, input_filesuffix='', output_filesuffix=''):
+    """Add the avalanche contribution and altitude distribution with time to the glacier directory 
+
+    Parameters
+    ----------
+    gdir: :py:class:`oggm.GlacierDirectory`
+        the glacier directory to process
+    input_filesuffix: str
+        string ID for GCM, SSP, control/avalanche scenario. 
+    output_filesuffix: str
+        output file suffix
+    """
+
+    with xr.open_dataset(gdir.get_filepath('gridded_simulation', filesuffix=input_filesuffix)) as ds:
+        ds = ds.load()
+
+    with xr.open_dataset(gdir.get_filepath('gridded_data')) as gridded_data:
+        gridded_data = gridded_data.load()
+
+    # Initialize lists to store computed values
+    mean_snowslide = [] if 'snowslide_1m' in gridded_data else None
+    median_topo = []
+    min_topo = []
+    max_topo = []
+    
+    # Loop over each year
+    for year in ds["time"]:
+        # Select data for the current year
+        thickness_year = ds.simulated_thickness.sel(time=year)
+        
+        # Create a mask where simulated thickness > 0
+        mask = thickness_year > 0
+        
+        if mean_snowslide is not None:
+            # Mask snowslide_1m based on the current year's thickness
+            snowslide_masked = gridded_data.snowslide_1m.where(mask)
+            
+            # Compute statistics (ignoring NaNs)
+            mean_value_snowslide = snowslide_masked.mean().item()
+            mean_snowslide.append(mean_value_snowslide)
+        
+        # Compute updated topography based on the current year's thickness
+        updated_topo = ds.bedrock + thickness_year
+        topo_masked = updated_topo.where(mask)
+        
+        median_value_topo = topo_masked.median().item()
+        min_value_topo = topo_masked.min().item()
+        max_value_topo = topo_masked.max().item()
+        
+        median_topo.append(median_value_topo)
+        min_topo.append(min_value_topo)
+        max_topo.append(max_value_topo)
+
+    # Convert lists to xarray DataArrays
+    if mean_snowslide is not None:
+        ds["mean_snowslide"] = ("time", mean_snowslide)
+    ds["median_topo"] = ("time", median_topo)
+    ds["min_topo"] = ("time", min_topo)
+    ds["max_topo"] = ("time", max_topo)
+
+    ds.to_netcdf(gdir.get_filepath('gridded_simulation',
+                                   filesuffix=output_filesuffix))
+
+
 def _fallback(gdir):
     """If something wrong happens below"""
     d = dict()
     # Easy stats - this should always be possible
     d["rgi_id"] = gdir.rgi_id
     return d
+
+
+@utils.entity_task(log, fallback=_fallback)
+def distributed_outputs(gdir, input_filesuffix='', GCM='', SCENARIO='', TEST=''):
+    """Gather values for glacier-wide avalanche contribution and glacier altitudinal distribution with time
+
+    Parameters
+    ----------
+    gdir: :py:class:`oggm.GlacierDirectory`
+        the glacier directory to process
+    input_filesuffix: str
+        string ID for GCM, SSP, control/avalanche scenario. 
+    GCM: str
+        string for GCM scenario
+    SCENARIO: str
+        string for ssp scenario
+    TEST: str
+        string for test scenario
+    """
+
+    # Base dictionary for metadata
+    meta_data = {
+        "rgi_id": gdir.rgi_id,
+        "GCM": GCM,
+        "SSP": SCENARIO,
+        "TEST": TEST,
+    }
+
+    variables = ["mean_snowslide", "min_topo", "max_topo", "median_topo"]
+    time_range = np.arange(2000, 2102, 1)
+
+    # Dictionary to store data for each variable
+    data_dicts = {}
+
+    with xr.open_dataset(gdir.get_filepath('gridded_simulation', filesuffix=f'{input_filesuffix}_gridded')) as ds:
+        time_in_gdir = ds["time"].data
+        
+        for var in variables:
+            if var in ds:  # Check if variable exists
+                var_dict = meta_data.copy()  # Copy metadata for each variable
+                data = ds[var].data
+                
+                for t in time_range:
+                    mask = time_in_gdir == t
+                    var_dict[t] = np.mean(data[mask]) if np.any(mask) else np.nan  # Avoid empty slices
+                
+                data_dicts[var] = var_dict  # Store dictionary for this variable
+
+    d1 = data_dicts["mean_snowslide"]
+    d2 = data_dicts["min_topo"]
+    d3 = data_dicts["max_topo"]
+    d4 = data_dicts["median_topo"]
+
+    return d1, d2, d3, d4
 
 
 @utils.entity_task(log, fallback=_fallback)
