@@ -8,6 +8,8 @@ log = logging.getLogger(__name__)
 # Built ins
 import logging
 import os
+from time import gmtime, strftime
+import re as regexp
 
 # External libs
 import cftime
@@ -16,6 +18,7 @@ import xarray as xr
 import pandas as pd
 
 # Locals
+from oggm import __version__
 import oggm.cfg as cfg
 from oggm import utils
 from oggm.cfg import SEC_IN_YEAR, SEC_IN_MONTH
@@ -240,8 +243,81 @@ def update_topo(gdir, input_filesuffix='', output_filesuffix=''):
                                    filesuffix=output_filesuffix))
 
 
+# @utils.entity_task(log, writes=['gridded_simulation'])
+# def avalanche_contribution_evo(gdir, input_filesuffix='', output_filesuffix=''):
+#     """Add the avalanche contribution and altitude distribution with time to the glacier directory 
+# 
+#     Parameters
+#     ----------
+#     gdir: :py:class:`oggm.GlacierDirectory`
+#         the glacier directory to process
+#     input_filesuffix: str
+#         string ID for GCM, SSP, control/avalanche scenario. 
+#     output_filesuffix: str
+#         output file suffix
+#     """
+# 
+#     with xr.open_dataset(gdir.get_filepath('gridded_simulation', filesuffix=input_filesuffix)) as ds:
+#         ds = ds.load()
+# 
+#     with xr.open_dataset(gdir.get_filepath('gridded_data')) as gridded_data:
+#         gridded_data = gridded_data.load()
+# 
+#     # Initialize lists to store computed values
+#     mean_snowslide = [] if 'snowslide_1m' in gridded_data else None
+#     median_topo = []
+#     min_topo = []
+#     max_topo = []
+#     
+#     # Loop over each year
+#     for year in ds["time"]:
+#         # Select data for the current year
+#         thickness_year = ds.simulated_thickness.sel(time=year)
+#         
+#         # Create a mask where simulated thickness > 0
+#         mask = thickness_year > 0
+#         
+#         if mean_snowslide is not None:
+#             # Mask snowslide_1m based on the current year's thickness
+#             snowslide_masked = gridded_data.snowslide_1m.where(mask)
+#             
+#             # Compute statistics (ignoring NaNs)
+#             mean_value_snowslide = snowslide_masked.mean().item()
+#             mean_snowslide.append(mean_value_snowslide)
+#         
+#         # Compute updated topography based on the current year's thickness
+#         updated_topo = ds.bedrock + thickness_year
+#         topo_masked = updated_topo.where(mask)
+#         
+#         median_value_topo = topo_masked.median().item()
+#         min_value_topo = topo_masked.min().item()
+#         max_value_topo = topo_masked.max().item()
+#         
+#         median_topo.append(median_value_topo)
+#         min_topo.append(min_value_topo)
+#         max_topo.append(max_value_topo)
+# 
+#     # Convert lists to xarray DataArrays
+#     if mean_snowslide is not None:
+#         ds["mean_snowslide"] = ("time", mean_snowslide)
+#     ds["median_topo"] = ("time", median_topo)
+#     ds["min_topo"] = ("time", min_topo)
+#     ds["max_topo"] = ("time", max_topo)
+# 
+#     ds.to_netcdf(gdir.get_filepath('gridded_simulation',
+#                                    filesuffix=output_filesuffix))
+
+
+def _fallback(gdir):
+    """If something wrong happens below"""
+    d = dict()
+    # Easy stats - this should always be possible
+    d["rgi_id"] = gdir.rgi_id
+    return d
+
+
 @utils.entity_task(log, writes=['gridded_simulation'])
-def avalanche_contribution_evo(gdir, input_filesuffix='', output_filesuffix=''):
+def avalanche_contribution_evo(gdir, input_filesuffix=''):
     """Add the avalanche contribution and altitude distribution with time to the glacier directory 
 
     Parameters
@@ -254,117 +330,180 @@ def avalanche_contribution_evo(gdir, input_filesuffix='', output_filesuffix=''):
         output file suffix
     """
 
-    with xr.open_dataset(gdir.get_filepath('gridded_simulation', filesuffix=input_filesuffix)) as ds:
-        ds = ds.load()
+    with xr.open_dataset(gdir.get_filepath('fl_diagnostics', filesuffix=input_filesuffix), group='fl_0') as ds:
+        fl = ds.load()
 
-    with xr.open_dataset(gdir.get_filepath('gridded_data')) as gridded_data:
-        gridded_data = gridded_data.load()
+    with xr.open_dataset(gdir.get_filepath('model_diagnostics', filesuffix=input_filesuffix)) as ds:
+        model_diag = ds.load()
 
-    # Initialize lists to store computed values
-    mean_snowslide = [] if 'snowslide_1m' in gridded_data else None
-    median_topo = []
-    min_topo = []
-    max_topo = []
-    
-    # Loop over each year
-    for year in ds["time"]:
-        # Select data for the current year
-        thickness_year = ds.simulated_thickness.sel(time=year)
-        
-        # Create a mask where simulated thickness > 0
-        mask = thickness_year > 0
-        
-        if mean_snowslide is not None:
-            # Mask snowslide_1m based on the current year's thickness
-            snowslide_masked = gridded_data.snowslide_1m.where(mask)
-            
-            # Compute statistics (ignoring NaNs)
-            mean_value_snowslide = snowslide_masked.mean().item()
-            mean_snowslide.append(mean_value_snowslide)
-        
-        # Compute updated topography based on the current year's thickness
-        updated_topo = ds.bedrock + thickness_year
-        topo_masked = updated_topo.where(mask)
-        
-        median_value_topo = topo_masked.median().item()
-        min_value_topo = topo_masked.min().item()
-        max_value_topo = topo_masked.max().item()
-        
-        median_topo.append(median_value_topo)
-        min_topo.append(min_value_topo)
-        max_topo.append(max_value_topo)
+    # get binned pfact
+    binned_data_file = gdir.get_filepath('elevation_band_flowline', filesuffix='_fixed_dx')
+    binned_data = pd.read_csv(binned_data_file, index_col=0)
+    snowslide_1D = binned_data.snowslide_1m
 
-    # Convert lists to xarray DataArrays
-    if mean_snowslide is not None:
-        ds["mean_snowslide"] = ("time", mean_snowslide)
-    ds["median_topo"] = ("time", median_topo)
-    ds["min_topo"] = ("time", min_topo)
-    ds["max_topo"] = ("time", max_topo)
+    # calculate mean snowslide as a function of time
 
-    ds.to_netcdf(gdir.get_filepath('gridded_simulation',
-                                   filesuffix=output_filesuffix))
+    # Extract the distance values
+    dis_along_flowline = fl.dis_along_flowline.values
 
+    # Create a full snowslide_1D array with ones where missing
+    snowslide_extended = pd.Series(np.ones(len(dis_along_flowline)), index=dis_along_flowline)
 
-def _fallback(gdir):
-    """If something wrong happens below"""
-    d = dict()
-    # Easy stats - this should always be possible
-    d["rgi_id"] = gdir.rgi_id
-    return d
+    # Assign existing values where available
+    snowslide_extended.update(snowslide_1D)
 
+    # Convert snowslide_extended to an xarray DataArray
+    snowslide_da = xr.DataArray(snowslide_extended.values, coords=[dis_along_flowline], dims=["dis_along_flowline"])
 
-@utils.entity_task(log, fallback=_fallback)
-def distributed_outputs(gdir, input_filesuffix='', GCM='', SCENARIO='', TEST=''):
-    """Gather values for glacier-wide avalanche contribution and glacier altitudinal distribution with time
+    # Compute the weighted mean for each time step
+    mean_snowslide = (snowslide_da * fl.area_m2).sum(dim="dis_along_flowline") / fl.area_m2.sum(dim="dis_along_flowline")
 
-    Parameters
-    ----------
-    gdir: :py:class:`oggm.GlacierDirectory`
-        the glacier directory to process
-    input_filesuffix: str
-        string ID for GCM, SSP, control/avalanche scenario. 
-    GCM: str
-        string for GCM scenario
-    SCENARIO: str
-        string for ssp scenario
-    TEST: str
-        string for test scenario
-    """
+    # Add mean_snowslide to the dataset
+    model_diag["mean_snowslide"] = mean_snowslide
 
-    # Base dictionary for metadata
-    meta_data = {
-        "rgi_id": gdir.rgi_id,
-        "GCM": GCM,
-        "SSP": SCENARIO,
-        "TEST": TEST,
-    }
+    # Save back to the same file, overwriting it while preserving all variables
+    model_diag.to_netcdf(gdir.get_filepath('model_diagnostics', filesuffix=input_filesuffix), mode="w")
 
-    variables = ["mean_snowslide", "min_topo", "max_topo", "median_topo"]
-    time_range = np.arange(2000, 2102, 1)
+# @utils.entity_task(log, fallback=_fallback)
+# def distributed_outputs(gdir, input_filesuffix='', GCM='', SCENARIO='', TEST=''):
+#     """Gather values for glacier-wide avalanche contribution and glacier altitudinal distribution with time
+# 
+#     Parameters
+#     ----------
+#     gdir: :py:class:`oggm.GlacierDirectory`
+#         the glacier directory to process
+#     input_filesuffix: str
+#         string ID for GCM, SSP, control/avalanche scenario. 
+#     GCM: str
+#         string for GCM scenario
+#     SCENARIO: str
+#         string for ssp scenario
+#     TEST: str
+#         string for test scenario
+#     """
+# 
+#     # Base dictionary for metadata
+#     meta_data = {
+#         "rgi_id": gdir.rgi_id,
+#         "GCM": GCM,
+#         "SSP": SCENARIO,
+#         "TEST": TEST,
+#     }
+# 
+#     variables = ["mean_snowslide", "min_topo", "max_topo", "median_topo"]
+#     time_range = np.arange(2000, 2102, 1)
+# 
+#     # Dictionary to store data for each variable
+#     data_dicts = {}
+# 
+#     try:
+#         with xr.open_dataset(gdir.get_filepath('gridded_simulation', filesuffix=f'{input_filesuffix}_gridded')) as ds:
+#             time_in_gdir = ds["time"].data
+#             
+#             for var in variables:
+#                 if var in ds:  # Check if variable exists
+#                     var_dict = meta_data.copy()  # Copy metadata for each variable
+#                     data = ds[var].data
+#                     
+#                     for t in time_range:
+#                         mask = time_in_gdir == t
+#                         var_dict[t] = np.mean(data[mask]) if np.any(mask) else np.nan  # Avoid empty slices
+#                     
+#                     data_dicts[var] = var_dict  # Store dictionary for this variable
+# 
+#         d1 = data_dicts["mean_snowslide"]
+#         d2 = data_dicts["min_topo"]
+#         d3 = data_dicts["max_topo"]
+#         d4 = data_dicts["median_topo"]
+# 
+#         # Convert each dictionary to a DataFrame (keys become the index, values become a column)
+#         d1 = pd.DataFrame.from_dict(d1, orient="index", columns=["mean_snowslide"])
+#         d2 = pd.DataFrame.from_dict(d2, orient="index", columns=["min_topo"])
+#         d3 = pd.DataFrame.from_dict(d3, orient="index", columns=["max_topo"])
+#         d4 = pd.DataFrame.from_dict(d4, orient="index", columns=["median_topo"])
+#     except Exception as e:
+#         print(f"Error processing {input_filesuffix}: {e}")
+# 
+#     return d1, d2, d3, d4
 
-    # Dictionary to store data for each variable
-    data_dicts = {}
-
-    with xr.open_dataset(gdir.get_filepath('gridded_simulation', filesuffix=f'{input_filesuffix}_gridded')) as ds:
-        time_in_gdir = ds["time"].data
-        
-        for var in variables:
-            if var in ds:  # Check if variable exists
-                var_dict = meta_data.copy()  # Copy metadata for each variable
-                data = ds[var].data
-                
-                for t in time_range:
-                    mask = time_in_gdir == t
-                    var_dict[t] = np.mean(data[mask]) if np.any(mask) else np.nan  # Avoid empty slices
-                
-                data_dicts[var] = var_dict  # Store dictionary for this variable
-
-    d1 = data_dicts["mean_snowslide"]
-    d2 = data_dicts["min_topo"]
-    d3 = data_dicts["max_topo"]
-    d4 = data_dicts["median_topo"]
-
-    return d1, d2, d3, d4
+# @utils.global_task(log)
+# def compile_distributed_outputs(gdirs, output_filesuffix="", input_filesuffix='', GCM='', SCENARIO='', TEST='', dir_path=None):
+#     """Gather as much statistics as possible about the distributed outputs
+# 
+#     It can be used to do result diagnostics and other stuffs.
+# 
+#     Parameters
+#     ----------
+#     gdirs : list of :py:class:`oggm.GlacierDirectory` objects
+#         the glacier directories to process
+#     output_filesuffix : str
+#         add suffix to output file
+#     path : str
+#         Folder where to write the csv file. Defaults to cfg.PATHS["working_dir"]
+#     input_filesuffix: str
+#         string ID for GCM, SSP, control/avalanche scenario. 
+#     GCM: str
+#         string for GCM scenario
+#     SCENARIO: str
+#         string for ssp scenario
+#     TEST: str
+#         string for test scenario
+#     """
+#     from oggm.workflow import execute_entity_task
+# 
+#     try:
+#         out_df = execute_entity_task(distributed_outputs,gdirs, 
+#                                     input_filesuffix=input_filesuffix, GCM=GCM, SCENARIO=SCENARIO, TEST=TEST)
+# 
+#         d1, d2, d3, d4 = out_df[1]  # out_df is a tuple of dictionaries
+# 
+#         # Convert outputs to lists
+#         mean_snowslide = list(d1.values())
+#         min_topo = list(d2.values())
+#         max_topo = list(d3.values())
+#         median_topo = list(d4.values())
+# 
+#         if dir_path is None:
+#             dir_path = cfg.PATHS["working_dir"]
+# 
+#         # Define output paths
+#         all_results = {
+#             "mean_snowslide": [],
+#             "min_topo": [],
+#             "max_topo": [],
+#             "median_topo": [],
+#         }
+# 
+#         # append results
+#         all_results["mean_snowslide"].append(mean_snowslide)
+#         all_results["min_topo"].append(min_topo)
+#         all_results["max_topo"].append(max_topo)
+#         all_results["median_topo"].append(median_topo)
+# 
+#         output_files = {
+#             "mean_snowslide": f"glacier_avalanche_contribution_vs_time{input_filesuffix}.csv",
+#             "min_topo": f"min_glacier_elev_vs_time{input_filesuffix}.csv",
+#             "max_topo": f"max_glacier_elev_vs_time{input_filesuffix}.csv",
+#             "median_topo": f"median_glacier_elev_vs_time{input_filesuffix}.csv",
+#         }
+# 
+#         # Extract the common indices from the first dictionary
+#         indices = list(d1.keys())
+# 
+#         # Concatenate results and save to CSV
+#         for key, filename in output_files.items():
+#             output_path = os.path.join(dir_path, filename)
+#             if all_results[key]:  # Avoid writing empty files
+#                 # Construct DataFrame with indices in the first row
+#                 df = pd.DataFrame([indices] + all_results[key])
+#                 df.to_csv(output_path, index=False, header=False)
+#                 print(f"Saved {key} to {output_path}")
+#             else:
+#                 print(f"Warning: No data for {key}, skipping file save.")
+#     except Exception as e:
+#         print(f"Error processing {input_filesuffix}: {e}")
+# 
+#     return df
 
 
 @utils.entity_task(log, fallback=_fallback)
@@ -1587,7 +1726,252 @@ def mb_calibration_from_geodetic_mb_with_avalanches_2D(
     )
 
 
+@utils.global_task(log)
+@utils.compile_to_netcdf(log)
+def compile_run_output(gdirs, path=True, input_filesuffix='',
+                       use_compression=True):
+    """Compiles the output of the model runs of several gdirs into one file.
 
+    Updated from utils._workflow to include mean_snowslide output
+
+    Parameters
+    ----------
+    gdirs : list of :py:class:`oggm.GlacierDirectory` objects
+        the glacier directories to process
+    path : str
+        where to store (default is on the working dir).
+        Set to `False` to disable disk storage.
+    input_filesuffix : str
+        the filesuffix of the files to be compiled
+    use_compression : bool
+        use zlib compression on the output netCDF files
+
+    Returns
+    -------
+    ds : :py:class:`xarray.Dataset`
+        compiled output
+    """
+
+    # Get the dimensions of all this
+    rgi_ids = [gd.rgi_id for gd in gdirs]
+
+    # To find the longest time, we have to open all files unfortunately, we
+    # also create a list of all data variables (in case not all files contain
+    # the same data variables), and finally we decide on the name of "3d"
+    # variables in case we have daily
+    time_info = {}
+    time_keys = ['hydro_year', 'hydro_month', 'calendar_year', 'calendar_month']
+    allowed_data_vars = ['volume_m3', 'volume_bsl_m3', 'volume_bwl_m3',
+                         'volume_m3_min_h',  # only here for back compatibility
+                         # as it is a variable in gdirs v1.6 2023.1
+                         'area_m2', 'area_m2_min_h', 'length_m', 'calving_m3',
+                         'calving_rate_myr', 'off_area',
+                         'on_area', 'model_mb', 'is_fixed_geometry_spinup', 'mean_snowslide']
+    for gi in range(10):
+        allowed_data_vars += [f'terminus_thick_{gi}']
+    # this hydro variables can be _monthly or _daily
+    hydro_vars = ['melt_off_glacier', 'melt_on_glacier',
+                  'liq_prcp_off_glacier', 'liq_prcp_on_glacier',
+                  'snowfall_off_glacier', 'snowfall_on_glacier',
+                  'melt_residual_off_glacier', 'melt_residual_on_glacier',
+                  'snow_bucket', 'residual_mb']
+    for v in hydro_vars:
+        allowed_data_vars += [v]
+        allowed_data_vars += [v + '_monthly']
+        allowed_data_vars += [v + '_daily']
+    data_vars = {}
+    name_2d_dim = 'month_2d'
+    contains_3d_data = False
+    for gd in gdirs:
+        fp = gd.get_filepath('model_diagnostics', filesuffix=input_filesuffix)
+        try:
+            with utils.ncDataset(fp) as ds:
+                time = ds.variables['time'][:]
+                if 'time' not in time_info:
+                    time_info['time'] = time
+                    for cn in time_keys:
+                        time_info[cn] = ds.variables[cn][:]
+                else:
+                    # Here we may need to append or add stuff
+                    ot = time_info['time']
+                    if time[0] > ot[-1] or ot[-1] < time[0]:
+                        raise InvalidWorkflowError('Trying to compile output '
+                                                   'without overlap.')
+                    if time[-1] > ot[-1]:
+                        p = np.nonzero(time == ot[-1])[0][0] + 1
+                        time_info['time'] = np.append(ot, time[p:])
+                        for cn in time_keys:
+                            time_info[cn] = np.append(time_info[cn],
+                                                      ds.variables[cn][p:])
+                    if time[0] < ot[0]:
+                        p = np.nonzero(time == ot[0])[0][0]
+                        time_info['time'] = np.append(time[:p], ot)
+                        for cn in time_keys:
+                            time_info[cn] = np.append(ds.variables[cn][:p],
+                                                      time_info[cn])
+
+                # check if their are new data variables and add them
+                for vn in ds.variables:
+                    # exclude time variables
+                    if vn in ['month_2d', 'calendar_month_2d',
+                              'hydro_month_2d']:
+                        name_2d_dim = 'month_2d'
+                        contains_3d_data = True
+                    elif vn in ['day_2d', 'calendar_day_2d', 'hydro_day_2d']:
+                        name_2d_dim = 'day_2d'
+                        contains_3d_data = True
+                    elif vn in allowed_data_vars:
+                        # check if data variable is new
+                        if vn not in data_vars.keys():
+                            data_vars[vn] = dict()
+                            data_vars[vn]['dims'] = ds.variables[vn].dimensions
+                            data_vars[vn]['attrs'] = dict()
+                            for attr in ds.variables[vn].ncattrs():
+                                if attr not in ['_FillValue', 'coordinates',
+                                                'dtype']:
+                                    data_vars[vn]['attrs'][attr] = getattr(
+                                        ds.variables[vn], attr)
+                    elif vn not in ['time'] + time_keys:
+                        # This check has future developments in mind.
+                        # If you end here it means the current data variable is
+                        # not under the allowed_data_vars OR not under the
+                        # defined time dimensions. If it is a new data variable
+                        # add it to allowed_data_vars above (also add it to
+                        # test_compile_run_output). If it is a new dimension
+                        # handle it in the if/elif statements.
+                        raise InvalidParamsError(f'The data variable "{vn}" '
+                                                 'is not known. Is it new or '
+                                                 'is it a new dimension? '
+                                                 'Check comment above this '
+                                                 'raise for more info!')
+
+            # If this worked, keep it as template
+            ppath = fp
+        except FileNotFoundError:
+            pass
+
+    if 'time' not in time_info:
+        raise RuntimeError('Found no valid glaciers!')
+
+    # OK found it, open it and prepare the output
+    with xr.open_dataset(ppath) as ds_diag:
+
+        # Prepare output
+        ds = xr.Dataset()
+
+        # Global attributes
+        ds.attrs['description'] = 'OGGM model output'
+        ds.attrs['oggm_version'] = __version__
+        ds.attrs['calendar'] = '365-day no leap'
+        ds.attrs['creation_date'] = strftime("%Y-%m-%d %H:%M:%S", gmtime())
+
+        # Copy coordinates
+        time = time_info['time']
+        ds.coords['time'] = ('time', time)
+        ds['time'].attrs['description'] = 'Floating year'
+        # New coord
+        ds.coords['rgi_id'] = ('rgi_id', rgi_ids)
+        ds['rgi_id'].attrs['description'] = 'RGI glacier identifier'
+        # This is just taken from there
+        for cn in ['hydro_year', 'hydro_month',
+                   'calendar_year', 'calendar_month']:
+            ds.coords[cn] = ('time', time_info[cn])
+            ds[cn].attrs['description'] = ds_diag[cn].attrs['description']
+
+        # Prepare the 2D variables
+        shape = (len(time), len(rgi_ids))
+        out_2d = dict()
+        for vn in data_vars:
+            if name_2d_dim in data_vars[vn]['dims']:
+                continue
+            var = dict()
+            var['data'] = np.full(shape, np.nan)
+            var['attrs'] = data_vars[vn]['attrs']
+            out_2d[vn] = var
+
+        # 1D Variables
+        out_1d = dict()
+        for vn, attrs in [('water_level', {'description': 'Calving water level',
+                                           'units': 'm'}),
+                          ('glen_a', {'description': 'Simulation Glen A',
+                                      'units': ''}),
+                          ('fs', {'description': 'Simulation sliding parameter',
+                                  'units': ''}),
+                          ]:
+            var = dict()
+            var['data'] = np.full(len(rgi_ids), np.nan)
+            var['attrs'] = attrs
+            out_1d[vn] = var
+
+        # Maybe 3D?
+        out_3d = dict()
+        if contains_3d_data:
+            # We have some 3d vars
+            month_2d = ds_diag[name_2d_dim]
+            ds.coords[name_2d_dim] = (name_2d_dim, month_2d.data)
+            cn = f'calendar_{name_2d_dim}'
+            ds.coords[cn] = (name_2d_dim, ds_diag[cn].values)
+
+            shape = (len(time), len(month_2d), len(rgi_ids))
+            for vn in data_vars:
+                if name_2d_dim not in data_vars[vn]['dims']:
+                    continue
+                var = dict()
+                var['data'] = np.full(shape, np.nan)
+                var['attrs'] = data_vars[vn]['attrs']
+                out_3d[vn] = var
+
+    # Read out
+    for i, gdir in enumerate(gdirs):
+        try:
+            ppath = gdir.get_filepath('model_diagnostics',
+                                      filesuffix=input_filesuffix)
+            with utils.ncDataset(ppath) as ds_diag:
+                it = ds_diag.variables['time'][:]
+                a = np.nonzero(time == it[0])[0][0]
+                b = np.nonzero(time == it[-1])[0][0] + 1
+                for vn, var in out_2d.items():
+                    # try statement if some data variables not in all files
+                    try:
+                        var['data'][a:b, i] = ds_diag.variables[vn][:]
+                    except KeyError:
+                        pass
+                for vn, var in out_3d.items():
+                    # try statement if some data variables not in all files
+                    try:
+                        var['data'][a:b, :, i] = ds_diag.variables[vn][:]
+                    except KeyError:
+                        pass
+                for vn, var in out_1d.items():
+                    var['data'][i] = ds_diag.getncattr(vn)
+        except FileNotFoundError:
+            pass
+
+    # To xarray
+    for vn, var in out_2d.items():
+        # Backwards compatibility - to remove one day...
+        for r in ['_m3', '_m2', '_myr', '_m']:
+            # Order matters
+            vn = regexp.sub(r + '$', '', vn)
+        ds[vn] = (('time', 'rgi_id'), var['data'])
+        ds[vn].attrs = var['attrs']
+    for vn, var in out_3d.items():
+        ds[vn] = (('time', name_2d_dim, 'rgi_id'), var['data'])
+        ds[vn].attrs = var['attrs']
+    for vn, var in out_1d.items():
+        ds[vn] = (('rgi_id', ), var['data'])
+        ds[vn].attrs = var['attrs']
+
+    # To file?
+    if path:
+        enc_var = {'dtype': 'float32'}
+        if use_compression:
+            enc_var['complevel'] = 5
+            enc_var['zlib'] = True
+        encoding = {v: enc_var for v in ds.data_vars}
+        ds.to_netcdf(path, encoding=encoding)
+
+    return ds
 
 
 
