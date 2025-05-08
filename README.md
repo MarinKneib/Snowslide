@@ -31,7 +31,7 @@ The list of all snowslide dependancies is given as follow :
 - numpy 1.26.4
 - xarray 2024.3.0
 - pandas
-- matplotlib
+- matplotlib 3.8.4
 - os
 - datetime
 
