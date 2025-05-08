@@ -43,6 +43,8 @@ snowslide using pip :
 This should clone the snowslide GitHub repository and install it as a python
 package in the active virtual environment chosen. 
 
+If you also want to use Snowslide with OGGM you will also need to install OGGM and the corresponding dependencies (https://docs.oggm.org/en/stable/installing-oggm.html)
+
 ## Package structure
 
 #### Directory root (``./``)
