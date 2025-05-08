@@ -30,7 +30,7 @@ The list of all snowslide dependancies is given as follow :
 - rasterio 1.3.10
 - numpy 1.26.4
 - xarray 2024.3.0
-- pandas
+- pandas 2.2.3
 - matplotlib 3.8.4
 - os
 - datetime
