@@ -29,7 +29,7 @@ The list of all snowslide dependancies is given as follow :
 - pysheds 0.3.5
 - rasterio 1.3.10
 - numpy 1.26.4
-- xarray
+- xarray 2024.3.0
 - pandas
 - matplotlib
 - os
