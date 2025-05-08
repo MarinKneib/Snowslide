@@ -23,8 +23,10 @@ the routing of the snow is calculated by an external python module called pyshed
 (docs : https://github.com/mdbartos/pysheds/). Running snowslide therefore requires
 installing pysheds (pip install pysheds).
 
+We recommend using SnowSlide with python version 3.10.
+
 The list of all snowslide dependancies is given as follow : 
-- pysheds
+- pysheds 0.3.5
 - rasterio
 - numpy
 - xarray
