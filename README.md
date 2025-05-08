@@ -36,7 +36,7 @@ The list of all snowslide dependancies is given as follow :
 These libraries must be installed to run snowslide. Then you can install 
 snowslide using pip : 
 
-    $ pip install -e git+https://github.com/GuillemCF/Snowslide.git
+    $ pip install -e git+https://github.com/MarinKneib/Snowslide.git#egg=snowslide
 
 This should clone the snowslide GitHub repository and install it as a python
 package in the active virtual environment chosen. 
