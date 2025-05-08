@@ -27,8 +27,8 @@ We recommend using SnowSlide with python version 3.10.
 
 The list of all snowslide dependancies is given as follow : 
 - pysheds 0.3.5
-- rasterio
-- numpy
+- rasterio 1.3.10
+- numpy 1.26.4
 - xarray
 - pandas
 - matplotlib
