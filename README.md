@@ -34,6 +34,8 @@ The list of all snowslide dependancies is given as follow :
 - matplotlib 3.8.4
 - os
 - datetime
+- netcdf4d
+- h5netcdf
 
 These libraries must be installed to run snowslide. Then you can install 
 snowslide using pip : 
