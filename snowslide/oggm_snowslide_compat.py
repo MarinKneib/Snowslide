@@ -90,7 +90,7 @@ def snowslide_to_gdir(gdir, routing="mfd", Propagation=True, snd0=None):
 
 @utils.entity_task(log, writes=["gridded_data"])
 def snowslide_to_gdir_meanmonthly(gdir, clim_path='climate_historical', routing="mfd", Propagation=True, default_grad=-0.0065, t_solid=0, t_liq=2, 
-    ys=2000, ye=2020, rho_freshsnow=200, climate_input_filesuffix=''):
+    ys=2000, ye=2020, rho_freshsnow=200, climate_input_filesuffix='', store_snd_before=False):
     """Add an estimation of avalanches snow redistribution to this glacier directory for a given period
     using given climate data using a mean monthly aggregation
 
@@ -114,6 +114,8 @@ def snowslide_to_gdir_meanmonthly(gdir, clim_path='climate_historical', routing=
         Density of fresh snow (kg/m3) to convert to snow height (input precipitation data is in kg/m2)
     climate_input_filesuffix: str
         filesuffix for the input climate file
+    store_snd_before: bool
+        argument to store snow accumulation before avalanching. Only useful to calculate volume of snow removed and added by avalanches
     """
     # number of years
     n_years = ye-ys
@@ -204,6 +206,16 @@ def snowslide_to_gdir_meanmonthly(gdir, clim_path='climate_historical', routing=
 
         # assign data to variable
         v[:] = pfact
+
+        if store_snd_before:
+            vn_b = "snowslide_snd_before"
+            if vn_b in nc.variables:
+                vb = nc.variables[vn_b]
+            else:
+                vb = nc.createVariable(vn_b, "f4", ("y", "x"), zlib=True)
+                vb.units = "m"
+                vb.long_name = "Monthly-mean snow height before redistribution"
+            vb[:] = snd_before
 
 
 @utils.entity_task(log, writes=['gridded_simulation'])
@@ -527,7 +539,9 @@ def snowslide_statistics(gdir):
     d["cenlon"] = gdir.cenlon
     d["snowslide_1m_glacier_average"] = np.NaN
     d["snowslide_deposit_area_km2"] = np.NaN
-    d["snowslide_deposit_volume_km3"] = np.NaN
+    d["snowslide_total_accumulation_km3"] = np.NaN
+    d["snowslide_volume_added_km3"] = np.NaN
+    d["snowslide_volume_removed_km3"] = np.NaN
     d["melt_f"] = gdir.read_json("mb_calib")['melt_f']
     d["temp_bias"] = gdir.read_json("mb_calib")['temp_bias']
     d["prcp_fac"] = gdir.read_json("mb_calib")['prcp_fac']
@@ -537,18 +551,26 @@ def snowslide_statistics(gdir):
 
     try:
         with xr.open_dataset(gdir.get_filepath("gridded_data")) as ds:
-            map_result = ds["snowslide_1m"].where(ds["glacier_mask"], np.NaN).load()
-            d["snowslide_1m_glacier_average"] = map_result.mean().data
+            mask = ds["glacier_mask"]
+            result = ds["snowslide_1m"].where(mask, np.NaN)
+            d["snowslide_1m_glacier_average"] = result.mean().data
             d["snowslide_deposit_area_km2"] = (
-                float(map_result.where(map_result > 1, drop=True).count())
-                * resolution**2
-                * 1e-6
+                float(result.where(result > 1, drop=True).count())
+                * resolution**2 * 1e-6
             )
-            d["snowslide_deposit_volume_km3"] = (
-                float(map_result.where(map_result > 1, drop=True).sum())
-                * resolution**2
-                * 1e-9
-            )
+            if "snowslide_snd_before" in ds.variables:
+                snd_before = ds["snowslide_snd_before"].where(mask, np.NaN)
+                diff = result * snd_before - snd_before
+
+                d["snowslide_total_accumulation_km3"] = (
+                    float((result * snd_before).sum()) * resolution**2 * 1e-9
+                )
+                d["snowslide_volume_added_km3"] = (
+                    float(diff.where(diff > 0, drop=True).sum()) * resolution**2 * 1e-9
+                )
+                d["snowslide_volume_removed_km3"] = (
+                    float(diff.where(diff < 0, drop=True).sum()) * resolution**2 * 1e-9
+                )
     except (FileNotFoundError, AttributeError, KeyError):
         pass
 

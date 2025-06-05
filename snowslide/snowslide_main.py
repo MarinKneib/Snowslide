@@ -360,6 +360,10 @@ def snowslide_base(
             if speed < 0 and abs(speed) < epsilon:
                 indicateur = 0
 
+        # 3rd exit condition if more than 500 iterations.
+        if iter > 500:
+            indicateur = 0
+
     log.info(f"{glacier_id}the algorithm converged in {iter} iterations")
 
     # Saving the output as .tif file with same projection and properties as the dem
