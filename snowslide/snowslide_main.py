@@ -169,6 +169,10 @@ def snowslide_complete(
             speed = np.sum(np.gradient(np.array(convergence)[-5:]))
             if speed < 0 and abs(speed) < 1e-2:
                 indicateur = 0
+      
+        # 3rd exit condition if too many iterations (can happen for very large & flat glaciers).
+        if iter > 500:
+            indicateur = 0
 
                 ### Saving parameters ###
 
