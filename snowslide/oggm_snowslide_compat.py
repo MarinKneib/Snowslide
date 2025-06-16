@@ -27,6 +27,7 @@ from oggm.core.massbalance import MassBalanceModel, mb_calibration_from_scalar_m
 from snowslide.snowslide_main import snowslide_base
 from oggm.utils import get_temp_bias_dataframe, clip_scalar
 from oggm.core import massbalance
+from oggm.core.flowline import flowline_from_dataset, glacier_from_netcdf, FileModel, MixedBedFlowline
 
 # Climate relevant global params
 MB_GLOBAL_PARAMS = [
@@ -214,7 +215,7 @@ def snowslide_to_gdir_meanmonthly(gdir, clim_path='climate_historical', routing=
             else:
                 vb = nc.createVariable(vn_b, "f4", ("y", "x"), zlib=True)
                 vb.units = "m"
-                vb.long_name = "Monthly-mean snow height before redistribution"
+                vb.long_name = "mean annual snow height before redistribution"
             vb[:] = snd_before
 
 
@@ -1101,7 +1102,14 @@ class MonthlyTIAvalancheModel(MassBalanceModel):
         padsize = prcpsol.shape[0] - self.ava_prpc_fac.shape[0]
         ava_prpc_fac = np.pad(self.ava_prpc_fac, (0, padsize), constant_values=(1, 1))
 
-        prcpsol *= ava_prpc_fac.reshape(prcpsol.shape[0], 1)
+        ava_fac = ava_prpc_fac.reshape(prcpsol.shape[0], 1)
+        prcpsol *= ava_fac
+
+        # calculate the positive & negative contributions from avalanches
+        mask_add = ava_fac>1
+        mask_rm = ava_fac<1
+        ava_added = np.where(mask_add, prcpsol * (ava_fac - 1), 0)
+        ava_removed = np.where(mask_rm, prcpsol * (ava_fac - 1), 0)
 
         mb_annual = np.sum(prcpsol - self.monthly_melt_f * tmelt, axis=1)
         mb_annual = (mb_annual - self.bias) / SEC_IN_YEAR / self.rho
@@ -1112,8 +1120,26 @@ class MonthlyTIAvalancheModel(MassBalanceModel):
                 tmelt.sum(axis=1),
                 prcp.sum(axis=1),
                 prcpsol.sum(axis=1),
+                ava_added.sum(axis=1),
+                ava_removed.sum(axis=1)
             )
         return mb_annual
+
+    def get_annual_acc(self, heights, year=None, add_climate=False, **kwargs):
+        t, tmelt, prcp, prcpsol = self._get_2d_annual_climate(heights, year)
+
+        # We add avalanches!!!
+        if prcpsol.shape[0] < self.ava_prpc_fac.shape[0]:
+            raise InvalidWorkflowError(
+                "Avalanche model needs to be " "called on the entire glacier " "domain"
+            )
+        padsize = prcpsol.shape[0] - self.ava_prpc_fac.shape[0]
+        ava_prpc_fac = np.pad(self.ava_prpc_fac, (0, padsize), constant_values=(1, 1))
+
+        prcpsol *= ava_prpc_fac.reshape(prcpsol.shape[0], 1)
+
+        acc_annual = np.sum(prcpsol, axis=1)  / SEC_IN_YEAR / self.rho
+        return acc_annual
 
 
 @utils.entity_task(log, writes=["mb_calib"])
@@ -1643,7 +1669,14 @@ class MonthlyTIAvalancheModel_2D(MassBalanceModel):
         padsize = prcpsol.shape[0] - self.ava_prpc_fac.shape[0]
         ava_prpc_fac = np.pad(self.ava_prpc_fac, (0, padsize), constant_values=(1, 1))
 
-        prcpsol *= ava_prpc_fac.reshape(prcpsol.shape[0], 1)
+        ava_fac = ava_prpc_fac.reshape(prcpsol.shape[0], 1)
+        prcpsol *= ava_fac
+
+        # calculate the positive & negative contributions from avalanches
+        mask_add = ava_fac>1
+        mask_rm = ava_fac<1
+        ava_added = np.where(mask_add, prcpsol * (ava_fac - 1), 0)
+        ava_removed = np.where(mask_rm, prcpsol * (ava_fac - 1), 0)
 
         mb_annual = np.sum(prcpsol - self.monthly_melt_f * tmelt, axis=1)
         mb_annual = (mb_annual - self.bias) / SEC_IN_YEAR / self.rho
@@ -1654,8 +1687,26 @@ class MonthlyTIAvalancheModel_2D(MassBalanceModel):
                 tmelt.sum(axis=1),
                 prcp.sum(axis=1),
                 prcpsol.sum(axis=1),
+                ava_added.sum(axis=1),
+                ava_removed.sum(axis=1)
             )
         return mb_annual
+
+    def get_annual_acc(self, heights, year=None, add_climate=False, **kwargs):
+        t, tmelt, prcp, prcpsol = self._get_2d_annual_climate(heights, year)
+
+        # We add avalanches!!!
+        if prcpsol.shape[0] < self.ava_prpc_fac.shape[0]:
+            raise InvalidWorkflowError(
+                "Avalanche model needs to be " "called on the entire glacier " "domain"
+            )
+        padsize = prcpsol.shape[0] - self.ava_prpc_fac.shape[0]
+        ava_prpc_fac = np.pad(self.ava_prpc_fac, (0, padsize), constant_values=(1, 1))
+
+        prcpsol *= ava_prpc_fac.reshape(prcpsol.shape[0], 1)
+
+        acc_annual = np.sum(prcpsol, axis=1)  / SEC_IN_YEAR / self.rho
+        return acc_annual
 
 
 @utils.entity_task(log, writes=["mb_calib"])
@@ -1795,6 +1846,7 @@ def compile_run_output(gdirs, path=True, input_filesuffix='',
     hydro_vars = ['melt_off_glacier', 'melt_on_glacier',
                   'liq_prcp_off_glacier', 'liq_prcp_on_glacier',
                   'snowfall_off_glacier', 'snowfall_on_glacier',
+                  'avalanche_added', 'avalanche_removed',
                   'melt_residual_off_glacier', 'melt_residual_on_glacier',
                   'snow_bucket', 'residual_mb']
     for v in hydro_vars:
@@ -1997,4 +2049,445 @@ def compile_run_output(gdirs, path=True, input_filesuffix='',
 
 
 
+@utils.entity_task(log)
+def run_with_hydro_ava(gdir, run_task=None, store_monthly_hydro=False,
+                   fixed_geometry_spinup_yr=None, ref_area_from_y0=False,
+                   ref_area_yr=None, ref_geometry_filesuffix=None,
+                   **kwargs):
+    """Run the flowline model and add hydro diagnostics.
 
+    - Added output variables - avalanche_added & avalanche_removed
+
+    Parameters
+    ----------
+    run_task : func
+        any of the `run_*`` tasks in the oggm.flowline module.
+        The mass balance model used needs to have the `add_climate` output
+        kwarg available though.
+    store_monthly_hydro : bool
+        also compute monthly hydrological diagnostics. The monthly outputs
+        are stored in 2D fields (years, months)
+    ref_area_yr : int
+        the hydrological output is computed over a reference area, which
+        per default is the largest area covered by the glacier in the simulation
+        period. Use this kwarg to force a specific area to the state of the
+        glacier at the provided simulation year.
+    ref_area_from_y0 : bool
+        overwrite ref_area_yr to the first year of the timeseries
+    ref_geometry_filesuffix : str
+        this kwarg allows to copy the reference area from a previous simulation
+        (useful for projections with historical spinup for example).
+        Set to a model_geometry file filesuffix that is present in the
+        current directory (e.g. `_historical` for pre-processed gdirs).
+        If set, ref_area_yr and ref_area_from_y0 refer to this file instead.
+    fixed_geometry_spinup_yr : int
+        if set to an integer, the model will artificially prolongate
+        all outputs of run_until_and_store to encompass all time stamps
+        starting from the chosen year. The only output affected are the
+        glacier wide diagnostic files - all other outputs are set
+        to constants during "spinup"
+    **kwargs : all valid kwargs for ``run_task``
+    """
+
+    # Make sure it'll return something
+    kwargs['return_value'] = True
+
+    # Check that kwargs and params are compatible
+    if kwargs.get('store_monthly_step', False):
+        raise InvalidParamsError('run_with_hydro only compatible with '
+                                 'store_monthly_step=False.')
+    if kwargs.get('mb_elev_feedback', 'annual') != 'annual':
+        raise InvalidParamsError('run_with_hydro only compatible with '
+                                 "mb_elev_feedback='annual' (yes, even "
+                                 "when asked for monthly hydro output).")
+    if not cfg.PARAMS['store_model_geometry']:
+        raise InvalidParamsError('run_with_hydro only works with '
+                                 "PARAMS['store_model_geometry'] = True "
+                                 "for now.")
+
+    if fixed_geometry_spinup_yr is not None:
+        kwargs['fixed_geometry_spinup_yr'] = fixed_geometry_spinup_yr
+
+    out = run_task(gdir, **kwargs) # ye=2020, fixed_geometry_spinup_yr=2000, climate_filename='climate_historical', climate_input_filesuffix='', output_filesuffix=f'_ava_2000-2020', mb_model_class=MonthlyTIAvalancheModel
+
+    if out is None:
+        raise InvalidWorkflowError('The run task ({}) did not run '
+                                   'successfully.'.format(run_task.__name__))
+
+    do_spinup = fixed_geometry_spinup_yr is not None
+    if do_spinup:
+        start_dyna_model_yr = out.y0
+
+    # Mass balance model used during the run
+    mb_mod = out.mb_model
+
+    # Glacier geometry during the run
+    suffix = kwargs.get('output_filesuffix', '')
+
+    # We start by fetching the reference model geometry
+    # The one we just computed
+    fmod = FileModel(gdir.get_filepath('model_geometry', filesuffix=suffix))
+    # The last one is the final state - we can't compute MB for that
+    years = fmod.years[:-1]
+
+    if ref_geometry_filesuffix:
+        if not ref_area_from_y0 and ref_area_yr is None:
+            raise InvalidParamsError('If `ref_geometry_filesuffix` is set, '
+                                     'users need to specify `ref_area_from_y0`'
+                                     ' or `ref_area_yr`')
+        # User provided
+        fmod_ref = FileModel(gdir.get_filepath('model_geometry',
+                                               filesuffix=ref_geometry_filesuffix))
+    else:
+        # ours as well
+        fmod_ref = fmod
+
+    # Check input
+    if ref_area_from_y0:
+        ref_area_yr = fmod_ref.years[0]
+
+    # Geometry at year yr to start with + off-glacier snow bucket
+    if ref_area_yr is not None:
+        if ref_area_yr not in fmod_ref.years:
+            raise InvalidParamsError('The chosen ref_area_yr is not '
+                                     'available!')
+        fmod_ref.run_until(ref_area_yr)
+
+    bin_area_2ds = []
+    bin_elev_2ds = []
+    ref_areas = []
+    snow_buckets = []
+    for fl in fmod_ref.fls:
+        # Glacier area on bins
+        bin_area = fl.bin_area_m2
+        ref_areas.append(bin_area)
+        snow_buckets.append(bin_area * 0)
+
+        # Output 2d data
+        shape = len(years), len(bin_area)
+        bin_area_2ds.append(np.empty(shape, np.float64))
+        bin_elev_2ds.append(np.empty(shape, np.float64))
+
+    # Ok now fetch all geometry data in a first loop
+    # We do that because we might want to get the largest possible area (default)
+    # and we want to minimize the number of calls to run_until
+    for i, yr in enumerate(years):
+        fmod.run_until(yr)
+        for fl_id, (fl, bin_area_2d, bin_elev_2d) in \
+                enumerate(zip(fmod.fls, bin_area_2ds, bin_elev_2ds)):
+            # Time varying bins
+            bin_area_2d[i, :] = fl.bin_area_m2
+            bin_elev_2d[i, :] = fl.surface_h
+
+    if ref_area_yr is None:
+        # Ok we get the max area instead
+        for ref_area, bin_area_2d in zip(ref_areas, bin_area_2ds):
+            ref_area[:] = bin_area_2d.max(axis=0)
+
+    # Ok now we have arrays, we can work with that
+    # -> second time varying loop is for mass balance
+    months = [1]
+    seconds = cfg.SEC_IN_YEAR
+    ntime = len(years) + 1
+    oshape = (ntime, 1)
+    if store_monthly_hydro:
+        months = np.arange(1, 13)
+        seconds = cfg.SEC_IN_MONTH
+        oshape = (ntime, 12)
+
+    out = {
+        'off_area': {
+            'description': 'Off-glacier area',
+            'unit': 'm 2',
+            'data': np.zeros(ntime),
+        },
+        'on_area': {
+            'description': 'On-glacier area',
+            'unit': 'm 2',
+            'data': np.zeros(ntime),
+        },
+        'melt_off_glacier': {
+            'description': 'Off-glacier melt',
+            'unit': 'kg yr-1',
+            'data': np.zeros(oshape),
+        },
+        'melt_on_glacier': {
+            'description': 'On-glacier melt',
+            'unit': 'kg yr-1',
+            'data': np.zeros(oshape),
+        },
+        'melt_residual_off_glacier': {
+            'description': 'Off-glacier melt due to MB model residual',
+            'unit': 'kg yr-1',
+            'data': np.zeros(oshape),
+        },
+        'melt_residual_on_glacier': {
+            'description': 'On-glacier melt due to MB model residual',
+            'unit': 'kg yr-1',
+            'data': np.zeros(oshape),
+        },
+        'liq_prcp_off_glacier': {
+            'description': 'Off-glacier liquid precipitation',
+            'unit': 'kg yr-1',
+            'data': np.zeros(oshape),
+        },
+        'liq_prcp_on_glacier': {
+            'description': 'On-glacier liquid precipitation',
+            'unit': 'kg yr-1',
+            'data': np.zeros(oshape),
+        },
+        'snowfall_off_glacier': {
+            'description': 'Off-glacier solid precipitation',
+            'unit': 'kg yr-1',
+            'data': np.zeros(oshape),
+        },
+        'snowfall_on_glacier': {
+            'description': 'On-glacier solid precipitation',
+            'unit': 'kg yr-1',
+            'data': np.zeros(oshape),
+        },
+        'avalanche_added': {
+            'description': 'On-glacier snow added by avalanches',
+            'unit': 'kg yr-1',
+            'data': np.zeros(oshape),
+        },
+        'avalanche_removed': {
+            'description': 'On-glacier snow removed by avalanches',
+            'unit': 'kg yr-1',
+            'data': np.zeros(oshape),
+        },
+        'snow_bucket': {
+            'description': 'Off-glacier snow reservoir (state variable)',
+            'unit': 'kg',
+            'data': np.zeros(oshape),
+        },
+        'model_mb': {
+            'description': 'Annual mass balance from dynamical model',
+            'unit': 'kg yr-1',
+            'data': np.zeros(ntime),
+        },
+        'residual_mb': {
+            'description': 'Difference (before correction) between mb model and dyn model melt',
+            'unit': 'kg yr-1',
+            'data': np.zeros(oshape),
+        },
+    }
+
+    # Initialize
+    fmod.run_until(years[0])
+    prev_model_vol = fmod.volume_m3
+
+    for i, yr in enumerate(years):
+
+        # Now the loop over the months
+        for m in months:
+
+            # A bit silly but avoid double counting in monthly ts
+            off_area_out = 0
+            on_area_out = 0
+
+            for fl_id, (ref_area, snow_bucket, bin_area_2d, bin_elev_2d) in \
+                    enumerate(zip(ref_areas, snow_buckets, bin_area_2ds, bin_elev_2ds)):
+
+                bin_area = bin_area_2d[i, :]
+                bin_elev = bin_elev_2d[i, :]
+
+                # Make sure we have no negative contribution when glaciers are out
+                off_area = utils.clip_min(ref_area - bin_area, 0)
+
+                try:
+                    if store_monthly_hydro:
+                        flt_yr = utils.date_to_floatyear(int(yr), m)
+                        mb_out = mb_mod.get_monthly_mb(bin_elev, fl_id=fl_id,
+                                                       year=flt_yr,
+                                                       add_climate=True)
+                        mb, _, _, prcp, prcpsol = mb_out
+                    else:
+                        mb_out = mb_mod.get_annual_mb(bin_elev, fl_id=fl_id,
+                                                      year=yr, add_climate=True)
+                        mb, _, _, prcp, prcpsol, ava_added, ava_removed  = mb_out
+                except ValueError as e:
+                    if 'too many values to unpack' in str(e):
+                        raise InvalidWorkflowError('Run with hydro needs a MB '
+                                                   'model able to add climate '
+                                                   'info to `get_annual_mb`.')
+                    raise
+
+                # Here we use mass (kg yr-1) not ice volume
+                mb *= seconds * cfg.PARAMS['ice_density']
+
+                # Bias of the mb model is a fake melt term that we need to deal with
+                # This is here for correction purposes later
+                mb_bias = mb_mod.bias * seconds / cfg.SEC_IN_YEAR
+
+                liq_prcp_on_g = (prcp - prcpsol) * bin_area
+                liq_prcp_off_g = (prcp - prcpsol) * off_area
+
+                prcpsol_on_g = prcpsol * bin_area
+                ava_added = ava_added * bin_area
+                ava_removed = ava_removed * bin_area
+                prcpsol_off_g = prcpsol * off_area
+
+                # IMPORTANT: this does not guarantee that melt cannot be negative
+                # the reason is the MB residual that here can only be understood
+                # as a fake melt process.
+                # In particular at the monthly scale this can lead to negative
+                # or winter positive melt - we try to mitigate this
+                # issue at the end of the year
+                melt_on_g = (prcpsol - mb) * bin_area
+                melt_off_g = (prcpsol - mb) * off_area
+
+                if mb_mod.bias == 0:
+                    # melt_on_g and melt_off_g can be negative, but the absolute
+                    # values are very small. so we clip them to zero
+                    melt_on_g = utils.clip_min(melt_on_g, 0)
+                    melt_off_g = utils.clip_min(melt_off_g, 0)
+
+                # This is the bad boy
+                bias_on_g = mb_bias * bin_area
+                bias_off_g = mb_bias * off_area
+
+                # Update bucket with accumulation and melt
+                snow_bucket += prcpsol_off_g
+                # It can only melt that much
+                melt_off_g = np.where((snow_bucket - melt_off_g) >= 0, melt_off_g, snow_bucket)
+                # Update bucket
+                snow_bucket -= melt_off_g
+
+                # This is recomputed each month but well
+                off_area_out += np.sum(off_area)
+                on_area_out += np.sum(bin_area)
+
+                # Monthly out
+                out['melt_off_glacier']['data'][i, m-1] += np.sum(melt_off_g)
+                out['melt_on_glacier']['data'][i, m-1] += np.sum(melt_on_g)
+                out['melt_residual_off_glacier']['data'][i, m-1] += np.sum(bias_off_g)
+                out['melt_residual_on_glacier']['data'][i, m-1] += np.sum(bias_on_g)
+                out['liq_prcp_off_glacier']['data'][i, m-1] += np.sum(liq_prcp_off_g)
+                out['liq_prcp_on_glacier']['data'][i, m-1] += np.sum(liq_prcp_on_g)
+                out['snowfall_off_glacier']['data'][i, m-1] += np.sum(prcpsol_off_g)
+                out['snowfall_on_glacier']['data'][i, m-1] += np.sum(prcpsol_on_g)
+                out['avalanche_added']['data'][i, m-1] += np.sum(ava_added)
+                out['avalanche_removed']['data'][i, m-1] += np.sum(ava_removed)
+
+                # Snow bucket is a state variable - stored at end of timestamp
+                if store_monthly_hydro:
+                    if m == 12:
+                        out['snow_bucket']['data'][i+1, 0] += np.sum(snow_bucket)
+                    else:
+                        out['snow_bucket']['data'][i, m] += np.sum(snow_bucket)
+                else:
+                    out['snow_bucket']['data'][i+1, m-1] += np.sum(snow_bucket)
+
+        # Update the annual data
+        out['off_area']['data'][i] = off_area_out
+        out['on_area']['data'][i] = on_area_out
+
+        # If monthly, put the residual where we can
+        if store_monthly_hydro and mb_mod.bias != 0:
+            for melt, bias in zip(
+                    [
+                        out['melt_on_glacier']['data'][i, :],
+                        out['melt_off_glacier']['data'][i, :],
+                    ],
+                    [
+                        out['melt_residual_on_glacier']['data'][i, :],
+                        out['melt_residual_off_glacier']['data'][i, :],
+                    ],
+            ):
+
+                real_melt = melt - bias
+                to_correct = utils.clip_min(real_melt, 0)
+                to_correct_sum = np.sum(to_correct)
+                if (to_correct_sum > 1e-7) and (np.sum(melt) > 0):
+                    # Ok we correct the positive melt instead
+                    fac = np.sum(melt) / to_correct_sum
+                    melt[:] = to_correct * fac
+
+        if do_spinup and yr < start_dyna_model_yr:
+            residual_mb = 0
+            model_mb = (out['snowfall_on_glacier']['data'][i, :].sum() -
+                        out['melt_on_glacier']['data'][i, :].sum())
+        else:
+            # Correct for mass-conservation and match the ice-dynamics model
+            fmod.run_until(yr + 1)
+            model_mb = (fmod.volume_m3 - prev_model_vol) * cfg.PARAMS['ice_density']
+            prev_model_vol = fmod.volume_m3
+
+            reconstructed_mb = (out['snowfall_on_glacier']['data'][i, :].sum() -
+                                out['melt_on_glacier']['data'][i, :].sum())
+            residual_mb = model_mb - reconstructed_mb
+
+        # Now correct
+        g_melt = out['melt_on_glacier']['data'][i, :]
+        if residual_mb == 0:
+            pass
+        elif store_monthly_hydro:
+            # We try to correct the melt only where there is some
+            asum = g_melt.sum()
+            if asum > 1e-7 and (residual_mb / asum < 1):
+                # try to find a fac
+                fac = 1 - residual_mb / asum
+                # fac should always be positive, otherwise melt_on_glacier
+                # gets negative. This is always true, because we only do the
+                # correction if residual_mb / asum < 1
+                corr = g_melt * fac
+                residual_mb = g_melt - corr
+                out['melt_on_glacier']['data'][i, :] = corr
+            else:
+                # We simply spread over the months
+                residual_mb /= 12
+                # residual_mb larger > melt_on_glacier
+                # add absolute difference to snowfall (--=+, mass conservation)
+                out['snowfall_on_glacier']['data'][i, :] -= utils.clip_max(g_melt - residual_mb, 0)
+                # assure that new melt_on_glacier is non-negative
+                out['melt_on_glacier']['data'][i, :] = utils.clip_min(g_melt - residual_mb, 0)
+        else:
+            # We simply apply the residual - no choice here
+            # residual_mb larger > melt_on_glacier:
+            # add absolute difference to snowfall (--=+, mass conservation)
+            out['snowfall_on_glacier']['data'][i, :] -= utils.clip_max(g_melt - residual_mb, 0)
+            # assure that new melt_on_glacier is non-negative
+            out['melt_on_glacier']['data'][i, :] = utils.clip_min(g_melt - residual_mb, 0)
+
+        out['model_mb']['data'][i] = model_mb
+        out['residual_mb']['data'][i] = residual_mb
+
+    # Convert to xarray
+    out_vars = cfg.PARAMS['store_diagnostic_variables']
+    ods = xr.Dataset()
+    ods.coords['time'] = fmod.years
+    if store_monthly_hydro:
+        ods.coords['month_2d'] = ('month_2d', np.arange(1, 13))
+        # For the user later
+        sm = cfg.PARAMS['hydro_month_' + mb_mod.hemisphere]
+        ods.coords['hydro_month_2d'] = ('month_2d', (np.arange(12) + 12 - sm + 1) % 12 + 1)
+        ods.coords['calendar_month_2d'] = ('month_2d', np.arange(1, 13))
+    for varname, d in out.items():
+        data = d.pop('data')
+        if varname not in out_vars:
+            continue
+        if len(data.shape) == 2:
+            # First the annual agg
+            if varname == 'snow_bucket':
+                # Snowbucket is a state variable
+                ods[varname] = ('time', data[:, 0])
+            else:
+                # Last year is never good
+                data[-1, :] = np.nan
+                ods[varname] = ('time', np.sum(data, axis=1))
+            # Then the monthly ones
+            if store_monthly_hydro:
+                ods[varname + '_monthly'] = (('time', 'month_2d'), data)
+        else:
+            assert varname != 'snow_bucket'
+            data[-1] = np.nan
+            ods[varname] = ('time', data)
+        for k, v in d.items():
+            ods[varname].attrs[k] = v
+            if store_monthly_hydro and (varname + '_monthly') in ods:
+                ods[varname + '_monthly'].attrs[k] = v
+
+    # Append the output to the existing diagnostics
+    fpath = gdir.get_filepath('model_diagnostics', filesuffix=suffix)
+    ods.to_netcdf(fpath, mode='a')
