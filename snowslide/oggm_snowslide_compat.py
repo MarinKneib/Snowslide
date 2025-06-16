@@ -2454,6 +2454,9 @@ def run_with_hydro_ava(gdir, run_task=None, store_monthly_hydro=False,
         out['residual_mb']['data'][i] = residual_mb
 
     # Convert to xarray
+    for new_var in ['avalanche_added', 'avalanche_removed']:
+        if new_var not in cfg.PARAMS['store_diagnostic_variables']:
+            cfg.PARAMS['store_diagnostic_variables'].append(new_var)
     out_vars = cfg.PARAMS['store_diagnostic_variables']
     ods = xr.Dataset()
     ods.coords['time'] = fmod.years
