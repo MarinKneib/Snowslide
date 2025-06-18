@@ -1675,8 +1675,8 @@ class MonthlyTIAvalancheModel_2D(MassBalanceModel):
         # calculate the positive & negative contributions from avalanches
         mask_add = ava_fac>1
         mask_rm = ava_fac<1
-        ava_added = np.where(mask_add, prcpsol * (ava_fac - 1), 0)
-        ava_removed = np.where(mask_rm, prcpsol * (ava_fac - 1), 0)
+        ava_added = np.where(mask_add, prcpsol * (1 - 1/ava_fac), 0)
+        ava_removed = np.where(mask_rm, prcpsol * (1 - 1/ava_fac), 0)
 
         mb_annual = np.sum(prcpsol - self.monthly_melt_f * tmelt, axis=1)
         mb_annual = (mb_annual - self.bias) / SEC_IN_YEAR / self.rho
