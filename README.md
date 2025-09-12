@@ -103,8 +103,8 @@ gives an example of using snowslide first in a snowslide workflow and then in an
 
 ## How to use snowslide in a classic workflow ?
 
-See the notebook in https://github.com/GuillemCF/Snowslide/blob/main/example/How_to_use_snowslide.ipynb
+See the notebook How_to_use_snowslide.ipynb in the example folder
 
 ## How to use snowslide in a OGGM workflow
 
-See the notebook in https://github.com/GuillemCF/Snowslide/blob/main/example/How_to_use_OGGMxSnowslide.ipynb
+See the notebook How_to_use_OGGMxSnowslide.ipynb in the example folder
