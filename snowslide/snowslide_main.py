@@ -1,7 +1,6 @@
 import os
 from datetime import datetime
 from snowslide.functions import *
-from snowslide.display_2Dresults import *
 
 # Module logger
 import logging
@@ -57,7 +56,7 @@ def snowslide_complete(
         The maximum snow height each pixel can store is computed as an exponential function of the slope. Parameters are the following:
             SND_max=c*exp(a*slope)
         a: float
-            Default is -0.14.
+            Default is 0.14.
         c: float
             Default is 145
         min: float
@@ -96,6 +95,10 @@ def snowslide_complete(
     convergence:
         value of indicateur at each iteration (list)
     """
+
+    # Display functions only imported here, so that `import snowslide` does not
+    # need their dependencies (imageio)
+    from snowslide.display_2Dresults import create_giff, save_plots2D
 
     ### initialization ###
     iter = 0
@@ -278,7 +281,7 @@ def snowslide_base(
         The maximum snow height each pixel can store is computed as an exponential function of the slope. Parameters are the following:
             snd_max=c*exp(a*slope)
         a: float
-            Default is -0.14.
+            Default is 0.14.
         c: float
             Default is 145
         min: float
