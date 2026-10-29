@@ -26,7 +26,7 @@ installing pysheds (pip install pysheds).
 We recommend using SnowSlide with python version 3.10.
 
 The list of all snowslide dependancies is given as follow : 
-- pysheds 0.3.5
+- pysheds 0.3.5 or 0.5 (see the note below)
 - rasterio 1.3.10
 - numpy 1.26.4
 - xarray 2024.3.0
@@ -36,6 +36,13 @@ The list of all snowslide dependancies is given as follow :
 - datetime
 - netcdf4d
 - h5netcdf
+- imageio (only for snowslide_complete)
+
+**pysheds 0.5**: older versions of snowslide do not route snow correctly with
+pysheds 0.5 (flow directions on the DEM edges and nodata values: on the example
+DEM, mfd lost most of the snow and d8 created snow). This is fixed in
+``dem_flow()``, which now sets ``nodata_out=0`` and allows no flow from or to the
+DEM edges.
 
 These libraries must be installed to run snowslide. Then you can install 
 snowslide using pip : 
@@ -70,6 +77,10 @@ If you also want to use Snowslide with OGGM you will also need to install OGGM a
 - ``oggm_snowslide_compat.py``: module recognised as a task by OGGM and used to launch snowslide 
     through a workflow using OGGM. This allows snowslide to use all the possibilities offered by OGGM.  
     (see after)
+- ``oggm_snowslide_compat_minimal.py``: reduced version of ``oggm_snowslide_compat.py`` (avalanche
+    tasks, monthly avalanche mass-balance model and its calibration)
+- ``oggm_snowslide_compat_minimal_oggm_dev_v163.py``: version for OGGM 1.6.3.dev (tested with commit
+    27ba8ed65), with the daily, surface-type and debris avalanche mass-balance models
 
 #### The tests (``./snowslide/test``)
 
