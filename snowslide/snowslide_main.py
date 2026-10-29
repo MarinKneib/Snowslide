@@ -57,7 +57,7 @@ def snowslide_complete(
         The maximum snow height each pixel can store is computed as an exponential function of the slope. Parameters are the following:
             SND_max=c*exp(a*slope)
         a: float
-            Default is -0.14.
+            Default is 0.14.
         c: float
             Default is 145
         min: float
@@ -278,7 +278,7 @@ def snowslide_base(
         The maximum snow height each pixel can store is computed as an exponential function of the slope. Parameters are the following:
             snd_max=c*exp(a*slope)
         a: float
-            Default is -0.14.
+            Default is 0.14.
         c: float
             Default is 145
         min: float

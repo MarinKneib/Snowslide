@@ -45,9 +45,23 @@ def dem_flow(hnso, grid, routing, preprocessing):
         inflated_dem = grid.resolve_flats(flooded_dem)
 
         ### Compute flow direction ###
-        flow_dir = grid.flowdir(inflated_dem, routing=routing)
+        flow_dir = grid.flowdir(inflated_dem, routing=routing, nodata_out=0)
     else:
-        flow_dir = grid.flowdir(hnso, routing=routing)
+        flow_dir = grid.flowdir(hnso, routing=routing, nodata_out=0)
+
+    ### No flow from or to the DEM edges ###
+    # With pysheds >= 0.5 the edge pixels get flow directions, so snow can be pulled
+    # from the static boundary ("infinite snow"). Not needed with pysheds 0.3.5.
+    if routing == "mfd":
+        flow_dir[:, 0, :] = 0  # Top
+        flow_dir[:, -1, :] = 0  # Bottom
+        flow_dir[:, :, 0] = 0  # Left
+        flow_dir[:, :, -1] = 0  # Right
+    else:  # d8
+        flow_dir[0, :] = 0  # Top row
+        flow_dir[-1, :] = 0  # Bottom row
+        flow_dir[:, 0] = 0  # Left col
+        flow_dir[:, -1] = 0  # Right col
 
     return flow_dir
 
