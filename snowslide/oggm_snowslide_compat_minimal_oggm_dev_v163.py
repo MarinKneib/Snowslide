@@ -27,7 +27,7 @@ import warnings
 from oggm import __version__
 import oggm.cfg as cfg
 from oggm import utils
-from oggm.cfg import SEC_IN_YEAR, SEC_IN_MONTH
+from oggm.cfg import SEC_IN_YEAR, SEC_IN_MONTH, SEC_IN_DAY
 from oggm.exceptions import InvalidWorkflowError, InvalidParamsError
 from oggm.core.massbalance import MassBalanceModel, mb_calibration_from_scalar_mb, decide_winter_precip_factor, MonthlyTIModel
 from snowslide.snowslide_main import snowslide_base
@@ -4211,7 +4211,7 @@ class DailyTIAvalancheDebrisModel(MonthlyTIModel):
             padsize = len(heights) - len(debris_ef)
             debris_ef = np.pad(debris_ef, (0, padsize), constant_values=1.0)
 
-        mb_daily = prcpsol - self.melt_f * tmelt * debris_ef[:, np.newaxis] # added debris
+        mb_daily = prcpsol - self.melt_f * tmelt * debris_ef  # one day: (n_heights,) arrays
 
         mb_daily -= (self.bias * SEC_IN_DAY / self.sec_in_year(year=year))
         rho = cfg.PARAMS['ice_density']
@@ -4255,7 +4255,13 @@ class DailyTIAvalancheDebrisModel(MonthlyTIModel):
         """
         t, tmelt, prcp, prcpsol = self._get_2d_monthly_climate(heights, year)
 
-        mb_month = np.sum(prcpsol - self.melt_f * tmelt * self.debris_ef[:, np.newaxis],
+        # Ensure the debris array matches the dynamic flowline length (pad downstream with 1.0)
+        debris_ef = self.debris_ef
+        if len(heights) > len(debris_ef):
+            padsize = len(heights) - len(debris_ef)
+            debris_ef = np.pad(debris_ef, (0, padsize), constant_values=1.0)
+
+        mb_month = np.sum(prcpsol - self.melt_f * tmelt * debris_ef[:, np.newaxis],
                           axis=1)
         sec_in_month = self.sec_in_month(year=year)
         mb_month -= (self.bias * sec_in_month / self.sec_in_year(year=year))
