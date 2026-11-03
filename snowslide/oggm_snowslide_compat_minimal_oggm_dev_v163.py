@@ -102,7 +102,7 @@ def EF_to_gdir(gdir, path_to_EF):
         total_ef = np.where(total_ef < 0, 1.0, total_ef)
     else:
         # If no file exists, default to 1.0 everywhere
-        total_ef = np.ones(gdir.grid.ny_nx, dtype=np.float32)
+        total_ef = np.ones((gdir.grid.ny, gdir.grid.nx), dtype=np.float32)
 
     # Write
     with utils.ncDataset(gdir.get_filepath("gridded_data"), "a") as nc:
