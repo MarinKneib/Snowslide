@@ -609,6 +609,14 @@ def compile_binned_statistics(gdirs, filesuffix="", dir_path=None):
     return ava, area, mb_control, mb_ava
 
 
+def _pad_ava_fac(ava_prpc_fac, n):
+    """Avalanche precipitation factor padded with 1 (no avalanche) to n heights."""
+    ava_prpc_fac = np.asarray(ava_prpc_fac, dtype=float)
+    if n > len(ava_prpc_fac):
+        ava_prpc_fac = np.pad(ava_prpc_fac, (0, n - len(ava_prpc_fac)), constant_values=1.0)
+    return ava_prpc_fac
+
+
 class MonthlyTIAvalancheModel(MassBalanceModel):
     """Monthly temperature index model with avalanches."""
 
@@ -1479,6 +1487,8 @@ class DailyTIAvalancheModel(MonthlyTIModel):
             solid precipitation.
         """
         t, tmelt, prcp, prcpsol = self._get_2d_monthly_climate(heights, year)
+        # avalanches, as in get_daily_mb and get_annual_mb (missing before 2026-11-26)
+        prcpsol = prcpsol * _pad_ava_fac(self.ava_prpc_fac, len(heights))[:, np.newaxis]
 
         mb_month = np.sum(prcpsol - self.melt_f * tmelt,
                           axis=1)
@@ -3858,8 +3868,9 @@ class MonthlyTIAvalancheDebrisModel(MassBalanceModel):
             padsize = len(heights) - len(debris_ef)
             debris_ef = np.pad(debris_ef, (0, padsize), constant_values=1.0)
 
-        mb_month = np.sum(prcpsol - self.melt_f * tmelt * debris_ef[:, np.newaxis],
-                      axis=1) # added debris 
+        # monthly climate is 1-D (one value per height): no sum here (summing over axis=1 of the
+        # broadcast heights x heights array summed over the heights, fixed 2026-11-26)
+        mb_month = prcpsol - self.melt_f * tmelt * debris_ef
 
         sec_in_month = self.sec_in_month(year=year)
         mb_month -= (self.bias * sec_in_month / self.sec_in_year(year=year))
@@ -4254,6 +4265,8 @@ class DailyTIAvalancheDebrisModel(MonthlyTIModel):
             solid precipitation.
         """
         t, tmelt, prcp, prcpsol = self._get_2d_monthly_climate(heights, year)
+        # avalanches, as in get_daily_mb and get_annual_mb (missing before 2026-11-26)
+        prcpsol = prcpsol * _pad_ava_fac(self.ava_prpc_fac, len(heights))[:, np.newaxis]
 
         # Ensure the debris array matches the dynamic flowline length (pad downstream with 1.0)
         debris_ef = self.debris_ef
